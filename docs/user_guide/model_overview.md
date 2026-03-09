@@ -75,7 +75,7 @@ Below summarizes the available performance, cost, and financial models for each 
         + `RiverResource`
 - `wind_resource`:
     - resource models:
-        + `WTKNRELDeveloperAPIWindResource`
+        + `WTKNLRDeveloperAPIWindResource`
         + `OpenMeteoHistoricalWindResource`
 - `solar_resource`:
     - resource models:
