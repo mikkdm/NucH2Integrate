@@ -52,6 +52,10 @@ from h2integrate.converters.nuclear.nuclear_plant import (
     QuinnNuclearCostModel,
     QuinnNuclearPerformanceModel,
 )
+from h2integrate.converters.nuclear.nuclear_plant_thermal import (
+    SimpleThermalNuclearReactorCostModel,
+    SimpleThermalNuclearReactorPerformanceModel)
+
 from h2integrate.converters.steel.steel_eaf_plant import (
     HydrogenEAFPlantCostComponent,
     NaturalGasEAFPlantCostComponent,
@@ -258,6 +262,8 @@ supported_models = {
     "NaturalGasPerformanceModel": NaturalGasPerformanceModel,
     "QuinnNuclearPerformanceModel": QuinnNuclearPerformanceModel,
     "QuinnNuclearCostModel": QuinnNuclearCostModel,
+    "NuclearwithThermal": SimpleThermalNuclearReactorPerformanceModel,
+    "NuclearwithThermalCost": SimpleThermalNuclearReactorCostModel,
     "NaturalGasCostModel": NaturalGasCostModel,
     # Transport
     "cable": CablePerformanceModel,
@@ -330,6 +336,7 @@ def is_electricity_producer(tech_name: str) -> bool:
         "natural_gas_plant",
         "grid_buy",
         "h2_fuel_cell",
+        "nuclear"
     ]
 
     return any(tech_name.startswith(elem) for elem in electricity_producing_techs)
