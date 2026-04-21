@@ -9,7 +9,7 @@ class SimpleThermalNuclearReactorConfig(BaseConfig):
     hourly_power_production: float = field()
     high_pressure_electrical_efficiency: float = field()
     low_pressure_electrical_efficiency: float = field()
-    # nuclear_reactor_capacity: = field()
+    nuclear_reactor_capacity: float = field()
 
 class SimpleThermalNuclearReactorPerformanceModel(om.ExplicitComponent):
     """
@@ -53,11 +53,13 @@ class SimpleThermalNuclearReactorPerformanceModel(om.ExplicitComponent):
         outputs["high_pressure_heat_demanded"] = (inputs["hourly_power_production"][:] + inputs["external_heat_demand"][:]*inputs["low_pressure_electrical_efficiency"]) / (inputs["high_pressure_electrical_efficiency"] + (1-inputs["high_pressure_electrical_efficiency"]) * inputs["low_pressure_electrical_efficiency"])
 
         outputs["high_pressure_heat"] = np.minimum(outputs["high_pressure_heat_demanded"], inputs["hourly_power_production"][:] / (inputs["high_pressure_electrical_efficiency"] + (1-inputs["high_pressure_electrical_efficiency"]) * inputs["low_pressure_electrical_efficiency"]))
-        
+     	#heat dispatch centric   
         outputs["heat_dispatched"] = np.minimum(inputs["external_heat_demand"][:], outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"])
 
         outputs["low_pressure_heat"] = (1 - inputs"high_pressure_electrical_efficiency"]) * outputs["high_pressure_heat"] - outputs["heat_dispatched"]
-
+        #electricity dispatch centric
+#        outputs["low_pressure_heat"] = np.minimum((inputs["hourly_power_production"][:] - #outputs["high_pressure_heat"]*inputs["high_pressure_electrical_efficiency"]) / #inputs["low_pressure_electrical_efficiency"],outputs["high_pressure_heat"][:] * (1 - #inputs["high_pressure_electrical_efficiency"]))
+#        outputs["heat_dispatched"] = outputs["high_pressure_heat"] * (1 - #inputs["high_pressure_electrical_efficiency"]) - outputs["low_pressure_heat"]
         outputs["electricity_out"] = inputs["high_pressure_electrical_efficiency"]*outputs["high_pressure_heat"] + inputs["low_pressure_electrical_efficiency"]*outputs["low_pressure_heat"]
 
 
