@@ -7,7 +7,10 @@ from h2integrate.converters.grid.grid import GridCostModel, GridPerformanceModel
 from h2integrate.finances.profast_lco import ProFastLCO
 from h2integrate.finances.profast_npv import ProFastNPV
 from h2integrate.demand.generic_demand import GenericDemandComponent
-from h2integrate.converters.steel.steel import SteelPerformanceModel, SteelCostAndFinancialModel
+from h2integrate.converters.steel.steel import (
+    SteelPerformanceModel,
+    SteelCostAndFinancialModel,
+)
 from h2integrate.converters.wind.floris import FlorisWindPlantPerformanceModel
 from h2integrate.demand.flexible_demand import FlexibleDemandComponent
 from h2integrate.converters.wind.wind_pysam import PYSAMWindPlantPerformanceModel
@@ -32,7 +35,10 @@ from h2integrate.converters.iron.iron_transport import (
     IronTransportCostComponent,
     IronTransportPerformanceComponent,
 )
-from h2integrate.converters.nitrogen.simple_ASU import SimpleASUCostModel, SimpleASUPerformanceModel
+from h2integrate.converters.nitrogen.simple_ASU import (
+    SimpleASUCostModel,
+    SimpleASUPerformanceModel,
+)
 from h2integrate.converters.wind.wind_plant_ard import ArdWindPlantModel
 from h2integrate.resource.solar.openmeteo_solar import OpenMeteoHistoricalSolarResource
 from h2integrate.converters.hydrogen.h2_fuel_cell import (
@@ -56,10 +62,16 @@ from h2integrate.storage.hydrogen.h2_storage_cost import (
     SaltCavernStorageCostModel,
     LinedRockCavernStorageCostModel,
 )
-from h2integrate.transporters.gas_stream_combiner import GasStreamCombinerPerformanceModel
-from h2integrate.transporters.generic_transporter import GenericTransporterPerformanceModel
+from h2integrate.transporters.gas_stream_combiner import (
+    GasStreamCombinerPerformanceModel,
+)
+from h2integrate.transporters.generic_transporter import (
+    GenericTransporterPerformanceModel,
+)
 from h2integrate.converters.generic_converter_cost import GenericConverterCostModel
-from h2integrate.converters.iron.humbert_ewin_perf import HumbertEwinPerformanceComponent
+from h2integrate.converters.iron.humbert_ewin_perf import (
+    HumbertEwinPerformanceComponent,
+)
 from h2integrate.storage.storage_performance_model import StoragePerformanceModel
 from h2integrate.converters.ammonia.ammonia_synloop import (
     AmmoniaSynLoopCostModel,
@@ -71,13 +83,21 @@ from h2integrate.converters.water.desal.desalination import (
     ReverseOsmosisCostModel,
     ReverseOsmosisPerformanceModel,
 )
-from h2integrate.resource.wind.nlr_developer_wtk_api import WTKNLRDeveloperAPIWindResource
+from h2integrate.resource.wind.nlr_developer_wtk_api import (
+    WTKNLRDeveloperAPIWindResource,
+)
 from h2integrate.converters.hydrogen.basic_cost_model import BasicElectrolyzerCostModel
-from h2integrate.converters.hydrogen.pem_electrolyzer import ECOElectrolyzerPerformanceModel
+from h2integrate.converters.hydrogen.pem_electrolyzer import (
+    ECOElectrolyzerPerformanceModel,
+)
 from h2integrate.converters.solar.atb_res_com_pv_cost import ATBResComPVCostModel
 from h2integrate.converters.solar.atb_utility_pv_cost import ATBUtilityPVCostModel
-from h2integrate.converters.iron.martin_mine_cost_model import MartinIronMineCostComponent
-from h2integrate.converters.iron.martin_mine_perf_model import MartinIronMinePerformanceComponent
+from h2integrate.converters.iron.martin_mine_cost_model import (
+    MartinIronMineCostComponent,
+)
+from h2integrate.converters.iron.martin_mine_perf_model import (
+    MartinIronMinePerformanceComponent,
+)
 from h2integrate.converters.methanol.smr_methanol_plant import (
     SMRMethanolPlantCostModel,
     SMRMethanolPlantFinanceModel,
@@ -87,7 +107,9 @@ from h2integrate.converters.ammonia.simple_ammonia_model import (
     SimpleAmmoniaCostModel,
     SimpleAmmoniaPerformanceModel,
 )
-from h2integrate.converters.iron.humbert_stinn_ewin_cost import HumbertStinnEwinCostComponent
+from h2integrate.converters.iron.humbert_stinn_ewin_cost import (
+    HumbertStinnEwinCostComponent,
+)
 from h2integrate.converters.methanol.co2h_methanol_plant import (
     CO2HMethanolPlantCostModel,
     CO2HMethanolPlantFinanceModel,
@@ -99,7 +121,10 @@ from h2integrate.converters.natural_gas.natural_gas_cc_ct import (
 )
 from h2integrate.converters.water_power.pysam_marine_cost import PySAMMarineCostModel
 from h2integrate.converters.hydrogen.singlitico_cost_model import SingliticoCostModel
-from h2integrate.converters.co2.marine.direct_ocean_capture import DOCCostModel, DOCPerformanceModel
+from h2integrate.converters.co2.marine.direct_ocean_capture import (
+    DOCCostModel,
+    DOCPerformanceModel,
+)
 from h2integrate.converters.hydrogen.steam_methane_reformer import (
     SteamMethaneReformerCostModel,
     SteamMethaneReformerPerformanceModel,
@@ -110,7 +135,9 @@ from h2integrate.converters.natural_gas.dummy_gas_components import (
     SimpleGasConsumerPerformance,
     SimpleGasProducerPerformance,
 )
-from h2integrate.converters.hydrogen.geologic.mathur_modified import GeoH2SubsurfaceCostModel
+from h2integrate.converters.hydrogen.geologic.mathur_modified import (
+    GeoH2SubsurfaceCostModel,
+)
 from h2integrate.resource.solar.nlr_developer_goes_api_models import (
     GOESTMYSolarAPI,
     GOESConusSolarAPI,
@@ -162,6 +189,12 @@ from h2integrate.control.control_strategies.storage.optimized_pyomo_controller i
 )
 from h2integrate.control.control_strategies.storage.simple_openloop_controller import (
     SimpleStorageOpenLoopController,
+)
+from h2integrate.control.control_strategies.storage.plm_openloop_storage_controller import (
+    PeakLoadManagementOpenLoopStorageController,
+)
+from h2integrate.control.control_strategies.storage.plm_optimized_storage_controller import (
+    PLMOptimizedStorageController,
 )
 from h2integrate.control.control_rules.storage.pyomo_storage_rule_min_operating_cost import (
     PyomoRuleStorageMinOperatingCosts,
@@ -278,6 +311,8 @@ supported_models = {
     # Control
     "SimpleStorageOpenLoopController": SimpleStorageOpenLoopController,
     "DemandOpenLoopStorageController": DemandOpenLoopStorageController,
+    "PeakLoadManagementOpenLoopStorageController": PeakLoadManagementOpenLoopStorageController,
+    "PLMOptimizedStorageController": PLMOptimizedStorageController,
     "HeuristicLoadFollowingStorageController": HeuristicLoadFollowingStorageController,
     "OptimizedDispatchStorageController": OptimizedDispatchStorageController,
     "GenericDemandComponent": GenericDemandComponent,
