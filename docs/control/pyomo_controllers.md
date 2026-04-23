@@ -61,13 +61,13 @@ tech_to_dispatch_connections: [
 
 # Optimized Demand Response Controller
 
-This controller optimizes the dispatch of a Battery Energy Storage System (BESS) based on a pre-defined supervisory signal. This pre-defined signal could be the Locational Marginal Price (LMP) or a demand profile. It could also be a $LMP\times demand$ depending on the application. 
+This controller optimizes the dispatch of a Battery Energy Storage System (BESS) based on a pre-defined supervisory signal. This signal could be the Locational Marginal Price (LMP), a demand profile, or a $LMP\times demand$ product depending on the application. The objective is to maximize incentive payments to the battery, subject to constraints on the maximum number of dispatch events per month and on the battery state of charge.
 
 ## Definitions
 
 **Given:**
 - $\lambda_t$ := `supervisory_signal`: price, demand, or price $\times$ demand time series at time $t$
-- $\mathcal{W}$ := `peak_window`: set of hours eligible for dispatch (e.g., 12:00--19:00)
+- $\mathcal{W}$ := `peak_window`: set of hours eligible for d`ispatch (e.g., 12:00--19:00)
 - $\gamma$ := performance incentive (\$/kW per dispatch hour)
 - $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate, used as deemed capacity since the battery is assumed to always dispatch at full rated power
 - $E_{\max} :=$ `max_capacity` $\times$ (`max_soc_fraction` $-$ `min_soc_fraction`): usable energy capacity (kWh)
@@ -145,3 +145,4 @@ $$
 $$
 u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad \text{SoC}_t \in [0, 1] \qquad \forall\, t, m
 $$
+![](./figures/plm_optimized_dispatch.png)
