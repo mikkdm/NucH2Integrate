@@ -59,7 +59,9 @@ class PLMOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
     discharge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     n_max_events: int = field(default=10)
     n_control_window: int = field(default=24)  # one month of hourly data
-    signal_threshold_percentile: float = field(default=0.0, validator=range_val(0,100)) # make sure this is valid
+    signal_threshold_percentile: float = field(
+        default=0.0, validator=range_val(0, 100)
+    )  # make sure this is valid
 
 
 class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
@@ -117,7 +119,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             )
 
         self.in_peak_window = self._compute_peak_window_mask()  # bool array, shape (T,)
-        self.month_ids = self._compute_month_ids()              # int array,  shape (T,)
+        self.month_ids = self._compute_month_ids()  # int array,  shape (T,)
 
     @staticmethod
     def _build_time_index(plant_config: dict) -> pd.DatetimeIndex:
@@ -215,7 +217,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         """Return the rolling-horizon dispatch solver callable.
 
         Args:
-            discrete_inputs (dict): OpenMDAO discrete inputs. 
+            discrete_inputs (dict): OpenMDAO discrete inputs.
 
         Returns:
             callable: ``pyomo_dispatch_solver(performance_model,
@@ -225,7 +227,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
 
             1. Builds a fresh MILP from the window's signal slice.
             2. Solves the MILP with GLPK.
-            3. Calls ``performance_model`` with the resulting dispatch
+            3. Calls ``performance_model`` with the optimized dispatch
                commands.
             4. Carries the terminal SOC into the next window.
 
@@ -371,8 +373,14 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         m.T = pyomo.Set(initialize=range(window_len), doc="Timesteps in window")
         m.M = pyomo.Set(initialize=months_in_window, doc="Months in window")
 
-        m.discharge = pyomo.Var(m.T, domain=pyomo.Binary, doc="Discharge binary: 1 = discharging at timestep t")
-        m.charge = pyomo.Var(m.T, domain=pyomo.Binary, doc="Charge binary: 1 = charging at timestep t")
+        m.discharge = pyomo.Var(
+            m.T,
+            domain=pyomo.Binary,
+            doc="Discharge binary: 1 = discharging at timestep t",
+        )
+        m.charge = pyomo.Var(
+            m.T, domain=pyomo.Binary, doc="Charge binary: 1 = charging at timestep t"
+        )
         m.soc = pyomo.Var(
             m.T,
             domain=pyomo.NonNegativeReals,
@@ -388,7 +396,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         m.peak_window_only = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
-                mdl.discharge[t] == 0 if not in_peak_window_w[t] else pyomo.Constraint.Skip
+                mdl.discharge[t] == 0
+                if not in_peak_window_w[t]
+                else pyomo.Constraint.Skip
             ),
         )
 
@@ -485,9 +495,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             inputs (dict): OpenMDAO continuous inputs.
             outputs (dict): OpenMDAO continuous outputs.
             discrete_inputs (dict): OpenMDAO discrete inputs.
-            discrete_outputs (dict): OpenMDAO discrete outputs. The key
-                ``'pyomo_dispatch_solver'`` is set to the callable
-                returned by :meth:`pyomo_setup`.
+            discrete_outputs (dict): OpenMDAO discrete outputs.
         """
         discrete_outputs["pyomo_dispatch_solver"] = self.pyomo_setup(discrete_inputs)
 
@@ -502,9 +510,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         Args:
             pyomo_model (pyomo.ConcreteModel): The model to solve.
             log_name (str): Optional log file name passed to
-                ``SolverOptions``. Defaults to ``''``.
-            user_solver_options (dict | None): Optional overrides for
-                GLPK solver options. Defaults to ``None``.
+                ``SolverOptions``.
+            user_solver_options (dict): Optional overrides for
+                GLPK solver options..
 
         Returns:
             pyomo.opt.SolverResults: Raw results object from GLPK.
@@ -529,6 +537,10 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         """
         P_max = self.config.max_charge_rate
         return [
-            (pyomo.value(self.dr_model.discharge[t]) - pyomo.value(self.dr_model.charge[t])) * P_max
+            (
+                pyomo.value(self.dr_model.discharge[t])
+                - pyomo.value(self.dr_model.charge[t])
+            )
+            * P_max
             for t in self.dr_model.T
         ]
