@@ -1,0 +1,94 @@
+"""
+
+This example demonstrates demand-response storage dispatch using a rolling-horizon
+MILP controller. The battery is scheduled to discharge during high-LMP peak hours
+to reduce facility demand charges and earn performance incentives.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from h2integrate.core.h2integrate_model import H2IntegrateModel
+from h2integrate.core.utilities import build_time_series_from_plant_config
+
+EXAMPLE_DIR = Path(__file__).parent
+
+
+model = H2IntegrateModel(EXAMPLE_DIR / "34_plm_optimized_dispatch.yaml")
+model.setup()
+
+N = model.plant_config["plant"]["simulation"]["n_timesteps"]
+percentile = model.technology_config["technologies"]["battery"]["model_inputs"]["control_parameters"]["signal_threshold_percentile"]
+
+model.run()
+
+lmp = np.array(
+    model.technology_config["technologies"]["battery"]["model_inputs"]
+    ["control_parameters"]["supervisory_signal"]
+)[:N]
+
+time_index = pd.DatetimeIndex(build_time_series_from_plant_config(model.plant_config))
+battery_power = model.prob.get_val("battery.storage_electricity_discharge", units="kW")
+soc_pct = model.prob.get_val("battery.SOC", units="percent")
+
+peak_mask = (time_index.hour >= 14) & (time_index.hour <= 18)
+threshold_pct = np.percentile(lmp, percentile)
+discharge_mask = battery_power > 1.0
+
+
+plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
+fig, axes = plt.subplots(3, 1, sharex=True, figsize=(11, 7))
+days = pd.date_range(time_index[0].normalize(), periods=14, freq="D", tz=time_index.tz)
+time_window = 14 * 24
+
+
+def shade_peaks(ax):
+    for day in days:
+        ax.axvspan(
+            day + pd.Timedelta(hours=14),
+            day + pd.Timedelta(hours=18),
+            color="orange", alpha=0.10, linewidth=0, zorder=0,
+        )
+
+
+w_discharge = discharge_mask[:time_window]
+
+ax = axes[0]
+shade_peaks(ax)
+ax.plot(time_index[:time_window], lmp[:time_window], color="steelblue", linewidth=1.0)
+ax.axhline(threshold_pct, color="crimson", linestyle="--", linewidth=0.8)
+ax.plot(time_index[:time_window][w_discharge], lmp[:time_window][w_discharge],
+        "r*", markersize=8, zorder=5)
+ax.set_ylabel("LMP ($/MWh)", fontsize=8)
+ax.set_ylim(bottom=0)
+
+# Panel 2: SOC
+ax = axes[1]
+ax.plot(time_index[:time_window], soc_pct[:time_window], color="tab:green", linewidth=1.0)
+ax.axhline(90, color="gray", linestyle=":", linewidth=0.7)
+ax.axhline(10, color="gray", linestyle=":", linewidth=0.7)
+ax.set_ylabel("SOC (%)", fontsize=8)
+ax.set_ylim([0, 105])
+
+ax = axes[2]
+shade_peaks(ax)
+ax.axhline(0, color="black", linewidth=0.4)
+width = pd.Timedelta(hours=0.8)
+pos_mask = (battery_power > 1)[:time_window]
+neg_mask = (battery_power < -1)[:time_window]
+ax.bar(time_index[:time_window][pos_mask], battery_power[:time_window][pos_mask] * 1e-3,
+       width=width, color="tab:red", alpha=0.8)
+ax.bar(time_index[:time_window][neg_mask], battery_power[:time_window][neg_mask] * 1e-3,
+       width=width, color="tab:blue", alpha=0.8)
+ax.set_ylabel("Power (MW)", fontsize=8)
+ax.tick_params(axis="x", labelrotation=30, labelsize=7)
+
+for ax in axes:
+    ax.tick_params(labelsize=7)
+    ax.grid(True, which="major", alpha=0.3, linewidth=0.5)
+
+plt.tight_layout()
+plt.savefig("plm_optimized_dispatch.png", dpi=150, bbox_inches="tight")
