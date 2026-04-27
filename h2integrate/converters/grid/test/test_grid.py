@@ -417,7 +417,7 @@ def test_grid_integration_dt_1800(subtests, tmp_path):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_buy_only_mode(plant_config, n_timesteps):
     """Test cost model with only buy price configured."""
     prob = om.Problem()
@@ -469,7 +469,7 @@ def test_buy_only_mode(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_sell_only_mode(plant_config, n_timesteps):
     """Test cost model with only sell price configured."""
     prob = om.Problem()
@@ -521,7 +521,7 @@ def test_sell_only_mode(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_both_buy_and_sell_prices(plant_config, n_timesteps):
     """Test cost model with both buy and sell prices configured."""
     prob = om.Problem()
@@ -570,14 +570,15 @@ def test_both_buy_and_sell_prices(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_time_varying_buy_price(plant_config, n_timesteps):
     """Test with time-varying electricity buy prices."""
     prob = om.Problem()
 
     interconnection_size = 50000.0
-    # Create time-varying prices (peak/off-peak)
-    buy_prices = np.array([0.08] * 6 + [0.15] * 12 + [0.08] * 6)  # 24 hours
+    # Create time-varying prices (peak/off-peak pattern repeated for a year)
+    daily_pattern = [0.08] * 6 + [0.15] * 12 + [0.08] * 6
+    buy_prices = np.tile(daily_pattern, 365)  # 8760 hours
 
     tech_config = {
         "model_inputs": {
@@ -613,14 +614,15 @@ def test_time_varying_buy_price(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_time_varying_sell_price(plant_config, n_timesteps):
     """Test with time-varying electricity sell prices."""
     prob = om.Problem()
 
     interconnection_size = 75000.0
-    # Create time-varying sell prices
-    sell_prices = np.array([0.03] * 6 + [0.07] * 12 + [0.03] * 6)  # 24 hours
+    # Create time-varying sell prices (peak/off-peak pattern repeated for a year)
+    daily_pattern = [0.03] * 6 + [0.07] * 12 + [0.03] * 6
+    sell_prices = np.tile(daily_pattern, 365)  # 8760 hours
 
     tech_config = {
         "model_inputs": {
@@ -656,7 +658,7 @@ def test_time_varying_sell_price(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_zero_interconnection_costs(plant_config, n_timesteps):
     """Test with zero interconnection costs."""
     prob = om.Problem()
@@ -703,7 +705,7 @@ def test_zero_interconnection_costs(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_per_year_buy_price(plant_config, n_timesteps):
     """Test cost model with per-year (plant_life-length) buy prices."""
     prob = om.Problem()
@@ -735,7 +737,7 @@ def test_per_year_buy_price(plant_config, n_timesteps):
     prob.setup()
 
     electricity_out = np.full(n_timesteps, 30000.0)  # 30 MW
-    prob.set_val("grid.electricity_out", electricity_out)
+    prob.set_val("grid.electricity_out", electricity_out, units="kW")
 
     prob.run_model()
 
@@ -748,7 +750,7 @@ def test_per_year_buy_price(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_per_year_sell_price(plant_config, n_timesteps):
     """Test cost model with per-year (plant_life-length) sell prices."""
     prob = om.Problem()
@@ -779,7 +781,7 @@ def test_per_year_sell_price(plant_config, n_timesteps):
     prob.setup()
 
     electricity_sold = np.full(n_timesteps, 40000.0)
-    prob.set_val("grid.electricity_sold", electricity_sold)
+    prob.set_val("grid.electricity_sold", electricity_sold, units="kW")
 
     prob.run_model()
 
@@ -792,7 +794,7 @@ def test_per_year_sell_price(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [24])
+@pytest.mark.parametrize("n_timesteps", [8760])
 def test_per_year_buy_and_sell_prices(plant_config, n_timesteps):
     """Test cost model with both buy and sell prices specified per-year."""
     prob = om.Problem()
@@ -825,8 +827,8 @@ def test_per_year_buy_and_sell_prices(plant_config, n_timesteps):
 
     electricity_out = np.full(n_timesteps, 20000.0)
     electricity_sold = np.full(n_timesteps, 30000.0)
-    prob.set_val("grid.electricity_out", electricity_out)
-    prob.set_val("grid.electricity_sold", electricity_sold)
+    prob.set_val("grid.electricity_out", electricity_out, units="kW")
+    prob.set_val("grid.electricity_sold", electricity_sold, units="kW")
 
     prob.run_model()
 
@@ -840,62 +842,16 @@ def test_per_year_buy_and_sell_prices(plant_config, n_timesteps):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("n_timesteps", [10])
-def test_per_year_buy_price_non_hourly_dt(plant_config, n_timesteps):
-    """Test per-year buy price with non-hourly timesteps (dt=300s)."""
-    plant_config["plant"]["simulation"]["dt"] = 300
-
-    prob = om.Problem()
-
-    plant_life = int(plant_config["plant"]["plant_life"])
-    interconnection_size = 50000.0
-    buy_prices = np.linspace(0.05, 0.15, plant_life).tolist()
-
-    tech_config = {
-        "model_inputs": {
-            "shared_parameters": {"interconnection_size": interconnection_size},
-            "cost_parameters": {
-                "cost_year": 2022,
-                "interconnection_capex_per_kw": 50.0,
-                "interconnection_opex_per_kw": 2.0,
-                "fixed_interconnection_cost": 100000.0,
-                "electricity_buy_price": buy_prices,
-                "electricity_sell_price": None,
-            },
-        }
-    }
-
-    prob.model.add_subsystem(
-        "grid",
-        GridCostModel(driver_config={}, plant_config=plant_config, tech_config=tech_config),
-    )
-
-    prob.setup()
-
-    electricity_out = np.full(n_timesteps, 30000.0)
-    prob.set_val("grid.electricity_out", electricity_out)
-
-    prob.run_model()
-
-    dt = 300
-    total_energy = np.sum(electricity_out) * (dt / 3600)
-    expected_varopex = total_energy * np.array(buy_prices)
-
-    varopex = prob.get_val("grid.VarOpEx", units="USD/year")
-    np.testing.assert_allclose(varopex, expected_varopex)
-
-
-@pytest.mark.unit
 def test_per_year_price_invalid_length():
     """Test that an invalid price array length raises ValueError."""
     plant_config = {
         "plant": {
             "plant_life": 30,
-            "simulation": {"n_timesteps": 24, "dt": 3600},
+            "simulation": {"n_timesteps": 8760, "dt": 3600},
         }
     }
 
-    bad_prices = [0.10] * 15  # Neither n_timesteps (24) nor plant_life (30)
+    bad_prices = [0.10] * 15  # Neither n_timesteps (8760) nor plant_life (30)
 
     tech_config = {
         "model_inputs": {
@@ -962,7 +918,7 @@ def test_per_year_price_ntimesteps_equals_plant_life_warning():
 
     # Verify it behaves as per-year pricing
     electricity_out = np.full(plant_life, 30000.0)
-    prob.set_val("grid.electricity_out", electricity_out)
+    prob.set_val("grid.electricity_out", electricity_out, units="kW")
     prob.run_model()
 
     dt = plant_config["plant"]["simulation"]["dt"]

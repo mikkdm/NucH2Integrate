@@ -105,7 +105,12 @@ def merge_shared_inputs(config, input_type):
         return config["shared_parameters"]
 
 
-def determine_price_mode(price, n_timesteps, plant_life, price_name="price"):
+def determine_price_mode(
+    price: float | list[float] | np.ndarray,
+    n_timesteps: int,
+    plant_life: int,
+    price_name: str = "price",
+) -> tuple[str, int]:
     """Determine the pricing mode based on the length of the price input.
 
     Prices can be specified as:
@@ -119,8 +124,8 @@ def determine_price_mode(price, n_timesteps, plant_life, price_name="price"):
     raised for clarity.
 
     Args:
-        price: The price value(s). Can be a scalar (int/float), list, or
-            numpy array.
+        price (float | list[float] | np.ndarray): The price value(s). Can be a
+            scalar (int/float), list, or numpy array.
         n_timesteps (int): Number of simulation timesteps.
         plant_life (int): Plant lifetime in years.
         price_name (str): Name of the price parameter for error/warning
