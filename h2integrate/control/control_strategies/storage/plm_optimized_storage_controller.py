@@ -35,8 +35,8 @@ class PLMOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
             length ``n_control_window`` per solve.
         peak_window (dict): Hours eligible for dispatch. Keys ``'start'``
             and ``'end'`` must be strings in ``HH:MM:SS`` format.
-        performance_incentive (float): Incentive revenue ($/kW per
-            dispatch hour).
+        performance_incentive (float): Incentive revenue in $/kWh —
+            multiplied by ``dt`` (in hours) per dispatched timestep.
         charge_efficiency (float): Charge efficiency in [0, 1].
             Defaults to 1.0.
         discharge_efficiency (float): Discharge efficiency in [0, 1].
@@ -97,9 +97,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             desc="Total storage capacity",
         )
 
-        self.n_timesteps = self.options["plant_config"]["plant"]["simulation"][
-            "n_timesteps"
-        ]
+        sim = self.options["plant_config"]["plant"]["simulation"]
+        self.n_timesteps = int(sim["n_timesteps"])
+        self.dt_seconds = int(sim["dt"])
         super().setup()
 
         self.updated_initial_soc = self.config.init_soc_fraction
@@ -380,8 +380,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             doc="State of charge SoC_t",
         )
 
+        dt_hours = self.dt_seconds / 3600.0
         m.objective = pyomo.Objective(
-            expr=-incentive * P_max * sum(m.discharge[t] for t in m.T),
+            expr=-incentive * P_max * dt_hours * sum(m.discharge[t] for t in m.T),
             sense=pyomo.minimize,
         )
 
@@ -413,8 +414,8 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
                 return pyomo.Constraint.Skip
             return mdl.soc[t] == (
                 mdl.soc[t - 1]
-                + eta_c * mdl.charge[t] * P_max / E_max
-                - mdl.discharge[t] * P_max / (eta_d * E_max)
+                + eta_c * mdl.charge[t] * P_max * dt_hours / E_max
+                - mdl.discharge[t] * P_max * dt_hours / (eta_d * E_max)
             )
 
         m.soc_evolution = pyomo.Constraint(m.T, rule=soc_evolution_rule)
