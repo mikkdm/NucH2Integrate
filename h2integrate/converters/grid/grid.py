@@ -119,6 +119,14 @@ class GridPerformanceModel(PerformanceModelBaseClass):
             desc="Electricity that was not sold due to interconnection limits",
         )
 
+        self.add_output(
+            "annual_electricity_sold",
+            val=0.0,
+            shape=self.plant_life,
+            units=f"({self.commodity_amount_units})/year",
+            desc="Annual electricity sold to the grid",
+        )
+
     def compute(self, inputs, outputs):
         interconnection_size = inputs["interconnection_size"]
 
@@ -145,6 +153,11 @@ class GridPerformanceModel(PerformanceModelBaseClass):
         )
         outputs["capacity_factor"] = outputs["total_electricity_produced"].sum() / max_production
         outputs["annual_electricity_produced"] = outputs["total_electricity_produced"] * (
+            1 / self.fraction_of_year_simulated
+        )
+
+        total_electricity_sold = np.sum(electricity_sold) * (self.dt / 3600)
+        outputs["annual_electricity_sold"] = total_electricity_sold * (
             1 / self.fraction_of_year_simulated
         )
 
@@ -208,15 +221,6 @@ class GridCostModel(CostModelBaseClass):
             desc="Interconnection capacity for cost calculation",
         )
 
-        # Electricity flowing OUT of grid (buying from grid)
-        self.add_input(
-            "electricity_out",
-            val=0.0,
-            shape=n_timesteps,
-            units="kW",
-            desc="Electricity flowing out of grid (buying from grid)",
-        )
-
         # Add buy price input if configured
         if self.config.electricity_buy_price is not None:
             self._buy_price_mode, buy_price_shape = determine_price_mode(
@@ -236,14 +240,23 @@ class GridCostModel(CostModelBaseClass):
         else:
             self._buy_price_mode = None
 
-        # Electricity flowing INTO grid (selling to grid)
-        self.add_input(
-            "electricity_sold",
-            val=0.0,
-            shape=n_timesteps,
-            units="kW",
-            desc="Electricity flowing into grid (selling to grid)",
-        )
+        # Electricity bought: use annual input for per-year pricing, timestep input otherwise
+        if self._buy_price_mode == "per_year":
+            self.add_input(
+                "annual_electricity_out",
+                val=0.0,
+                shape=plant_life,
+                units="kW*h/yr",
+                desc="Annual electricity flowing out of grid (buying from grid)",
+            )
+        else:
+            self.add_input(
+                "electricity_out",
+                val=0.0,
+                shape=n_timesteps,
+                units="kW",
+                desc="Electricity flowing out of grid (buying from grid)",
+            )
 
         # Add sell price input if configured
         if self.config.electricity_sell_price is not None:
@@ -264,6 +277,24 @@ class GridCostModel(CostModelBaseClass):
         else:
             self._sell_price_mode = None
 
+        # Electricity sold: use annual input for per-year pricing, timestep input otherwise
+        if self._sell_price_mode == "per_year":
+            self.add_input(
+                "annual_electricity_sold",
+                val=0.0,
+                shape=plant_life,
+                units="kW*h/yr",
+                desc="Annual electricity sold to grid",
+            )
+        else:
+            self.add_input(
+                "electricity_sold",
+                val=0.0,
+                shape=n_timesteps,
+                units="kW",
+                desc="Electricity flowing into grid (selling to grid)",
+            )
+
     def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
         interconnection_size = inputs["interconnection_size"]
 
@@ -281,25 +312,21 @@ class GridCostModel(CostModelBaseClass):
         varopex = np.zeros(plant_life)
 
         # Add buying costs if buy price is configured
-        # electricity_out represents power flowing OUT of grid (buying)
         if self.config.electricity_buy_price is not None:
-            electricity_out = inputs["electricity_out"]
             buy_price = inputs["electricity_buy_price"]
             if self._buy_price_mode == "per_year":
-                # Per-year price: total energy * price per year
-                total_energy_bought = np.sum(electricity_out) * (self.dt / 3600)
-                varopex += total_energy_bought * buy_price
+                # annual_electricity_out is already in kW*h/yr (shape=plant_life)
+                varopex += inputs["annual_electricity_out"] * buy_price
             else:
                 # Scalar or per-timestep: same cost each year
-                varopex += np.sum((self.dt / 3600) * electricity_out * buy_price)
+                varopex += np.sum((self.dt / 3600) * inputs["electricity_out"] * buy_price)
 
         # Add selling revenue if sell price is configured
-        # electricity_sold represents power flowing INTO grid (selling)
         if self.config.electricity_sell_price is not None:
             sell_price = inputs["electricity_sell_price"]
             if self._sell_price_mode == "per_year":
-                total_energy_sold = np.sum(inputs["electricity_sold"]) * (self.dt / 3600)
-                varopex -= total_energy_sold * sell_price
+                # annual_electricity_sold is already in kW*h/yr (shape=plant_life)
+                varopex -= inputs["annual_electricity_sold"] * sell_price
             else:
                 varopex -= np.sum((self.dt / 3600) * inputs["electricity_sold"] * sell_price)
 

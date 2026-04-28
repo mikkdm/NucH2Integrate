@@ -736,14 +736,13 @@ def test_per_year_buy_price(plant_config, n_timesteps):
 
     prob.setup()
 
-    electricity_out = np.full(n_timesteps, 30000.0)  # 30 MW
-    prob.set_val("grid.electricity_out", electricity_out, units="kW")
+    # Per-year mode uses annual_electricity_out (kWh/yr, shape=plant_life)
+    annual_elec = np.full(plant_life, 262_800_000.0)  # kWh/yr
+    prob.set_val("grid.annual_electricity_out", annual_elec, units="kW*h/yr")
 
     prob.run_model()
 
-    dt = plant_config["plant"]["simulation"]["dt"]
-    total_energy = np.sum(electricity_out) * (dt / 3600)
-    expected_varopex = total_energy * np.array(buy_prices)
+    expected_varopex = annual_elec * np.array(buy_prices)
 
     varopex = prob.get_val("grid.VarOpEx", units="USD/year")
     np.testing.assert_allclose(varopex, expected_varopex)
@@ -780,14 +779,13 @@ def test_per_year_sell_price(plant_config, n_timesteps):
 
     prob.setup()
 
-    electricity_sold = np.full(n_timesteps, 40000.0)
-    prob.set_val("grid.electricity_sold", electricity_sold, units="kW")
+    # Per-year mode uses annual_electricity_sold (kWh/yr, shape=plant_life)
+    annual_sold = np.full(plant_life, 350_400_000.0)  # kWh/yr
+    prob.set_val("grid.annual_electricity_sold", annual_sold, units="kW*h/yr")
 
     prob.run_model()
 
-    dt = plant_config["plant"]["simulation"]["dt"]
-    total_energy = np.sum(electricity_sold) * (dt / 3600)
-    expected_varopex = -total_energy * np.array(sell_prices)
+    expected_varopex = -annual_sold * np.array(sell_prices)
 
     varopex = prob.get_val("grid.VarOpEx", units="USD/year")
     np.testing.assert_allclose(varopex, expected_varopex)
@@ -825,17 +823,15 @@ def test_per_year_buy_and_sell_prices(plant_config, n_timesteps):
 
     prob.setup()
 
-    electricity_out = np.full(n_timesteps, 20000.0)
-    electricity_sold = np.full(n_timesteps, 30000.0)
-    prob.set_val("grid.electricity_out", electricity_out, units="kW")
-    prob.set_val("grid.electricity_sold", electricity_sold, units="kW")
+    # Per-year mode uses annual inputs (kWh/yr, shape=plant_life)
+    annual_bought = np.full(plant_life, 175_200_000.0)  # kWh/yr
+    annual_sold = np.full(plant_life, 262_800_000.0)  # kWh/yr
+    prob.set_val("grid.annual_electricity_out", annual_bought, units="kW*h/yr")
+    prob.set_val("grid.annual_electricity_sold", annual_sold, units="kW*h/yr")
 
     prob.run_model()
 
-    dt = plant_config["plant"]["simulation"]["dt"]
-    total_bought = np.sum(electricity_out) * (dt / 3600)
-    total_sold = np.sum(electricity_sold) * (dt / 3600)
-    expected_varopex = total_bought * np.array(buy_prices) - total_sold * np.array(sell_prices)
+    expected_varopex = annual_bought * np.array(buy_prices) - annual_sold * np.array(sell_prices)
 
     varopex = prob.get_val("grid.VarOpEx", units="USD/year")
     np.testing.assert_allclose(varopex, expected_varopex)
@@ -916,14 +912,12 @@ def test_per_year_price_ntimesteps_equals_plant_life_warning():
     user_warnings = [x for x in w if issubclass(x.category, UserWarning)]
     assert any("plant_life interpretation will be used" in str(x.message) for x in user_warnings)
 
-    # Verify it behaves as per-year pricing
-    electricity_out = np.full(plant_life, 30000.0)
-    prob.set_val("grid.electricity_out", electricity_out, units="kW")
+    # Verify it behaves as per-year pricing (uses annual input)
+    annual_elec = np.full(plant_life, 100_000.0)  # kWh/yr
+    prob.set_val("grid.annual_electricity_out", annual_elec, units="kW*h/yr")
     prob.run_model()
 
-    dt = plant_config["plant"]["simulation"]["dt"]
-    total_energy = np.sum(electricity_out) * (dt / 3600)
-    expected_varopex = total_energy * np.array(buy_prices)
+    expected_varopex = annual_elec * np.array(buy_prices)
 
     varopex = prob.get_val("grid.VarOpEx", units="USD/year")
     np.testing.assert_allclose(varopex, expected_varopex)
