@@ -377,8 +377,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 report_every = max(1, n_windows // 4)
                 window_idx = window_start // n_w
                 if window_idx % report_every == 0:
-                    pct = round(window_start / self.n_timesteps * 100)
-                    print(f"{pct}% done with PLM rolling dispatch")
+                    round(window_start / self.n_timesteps * 100)
 
                 month_ids_w = self.month_ids[window_start : window_start + window_len]
                 remaining_budget = {
@@ -420,10 +419,6 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                     storage_out[window_start + j] = storage_out_window[j]
                     soc_out[window_start + j] = soc_window[j]
 
-            print(
-                f"  Events per month: {dict(events_used_per_month)} "
-                f"(limit: {self.config.n_max_events}/month)"
-            )
             return storage_out, soc_out
 
         return pyomo_dispatch_solver
@@ -591,11 +586,6 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 f"status={status}, termination={tc}. "
                 f"init_soc={self.updated_initial_soc:.4f}, "
                 f"window_len={len(list(self.dr_model.T))}"
-            )
-        if tc == TerminationCondition.maxTimeLimit:
-            print(
-                f"  WARNING: solver hit time limit at window start={start_time} "
-                f"— using best solution found so far"
             )
 
         self.problem_state.store_problem_metrics(
