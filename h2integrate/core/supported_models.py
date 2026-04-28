@@ -56,6 +56,8 @@ from h2integrate.converters.nuclear.nuclear_plant_thermal import (
     SimpleThermalNuclearReactorCostModel,
     SimpleThermalNuclearReactorPerformanceModel)
 
+from h2integrate.converters.hydrogen.htse_electrolyzer import (HTSElectrolyzerPerformanceModel, HTSECostModel)
+
 from h2integrate.converters.steel.steel_eaf_plant import (
     HydrogenEAFPlantCostComponent,
     NaturalGasEAFPlantCostComponent,
@@ -211,6 +213,8 @@ supported_models = {
     "BasicElectrolyzerCostModel": BasicElectrolyzerCostModel,
     "CustomElectrolyzerCostModel": CustomElectrolyzerCostModel,
     "WOMBATElectrolyzerModel": WOMBATElectrolyzerModel,
+    "HTSEPerformanceModel": HTSEElectrolyzerPerformanceModel,
+    "HTSECostModel": HTSECostModel,
     "LinearH2FuelCellPerformanceModel": LinearH2FuelCellPerformanceModel,
     "H2FuelCellCostModel": H2FuelCellCostModel,
     "SteamMethaneReformerPerformanceModel": SteamMethaneReformerPerformanceModel,

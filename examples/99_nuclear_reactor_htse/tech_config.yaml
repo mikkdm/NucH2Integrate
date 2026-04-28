@@ -1,0 +1,65 @@
+name: "technology_config"
+description: "This is a nuclear plant generating electricity and can also provide heat"
+
+technologies:
+  nuclear:
+    performance_model:
+      model: "NuclearwithThermal"
+    cost_model:
+      model: "NuclearwithThermalCost"
+    model_inputs:
+      performance_parameters:
+        operating_mode: heat
+        hourly_power_production: 500 # MW
+        high_pressure_electrical_efficiency: 0.12
+        low_pressure_electrical_efficiency: 0.22
+        nuclear_reactor_capacity: 1000.0 # MWe
+
+        
+      cost_parameters:
+        nuclear_reactor_rated_capacity: 5000000.0
+        nuclear_reactor_upfront_cost: 5750.0
+        nuclear_reactor_fixed_om_cost: 2.64
+        nuclear_reactor_variable_om_cost: 0.0145
+        #Values from Table 38, Meta-Analysis of Advanced Nuclear Reactor Cost Estimations, 
+        #slightly adjusted away from 93% capacity factor
+  electrolyzer:
+    performance_model:
+      model: "HTSEElectrolyzerPerformanceModel"
+    cost_model:
+      model: "HTSECostModel"
+    model_inputs:
+      shared_parameters:
+        location: "onshore"
+        electrolyzer_capex: 1295 # $/kW overnight installed capital costs for a 1 MW system in 2022
+      performance_parameters:
+        sizing:
+          resize_for_enduse: False
+          size_for: 'BOL' #'BOL' (generous) or 'EOL' (conservative)
+          hydrogen_dmd:
+        cluster_rating_MW: 1
+        n_clusters: 25
+        pem_control_type: 'basic'
+        nominal_heat_required: 6.4 # kWh/kg-H2
+        nominal_electricity_required: 36.8 #kWh/kg-H2
+        eol_eff_percent_loss: 13 #eol defined as x% change in efficiency from bol
+        uptime_hours_until_eol: 80000. #number of 'on' hours until electrolyzer reaches eol
+        include_degradation_penalty: False #include degradation
+        turndown_ratio: 0.1 #turndown_ratio = minimum_cluster_power/cluster_rating_MW
+        pressure_H2: 20 # bar
+       financial_parameters:
+         capital_items:
+           depr_period: 7 # based on PEM Electrolysis H2A Production Case Study Documentation estimate of 7 years. also see https://www.irs.gov/publications/p946#en_US_2020_publink1000107507
+           replacement_cost_percent: 0.15 # percent of capex - H2A default case
+  combiner:
+    performance_model:
+      model: "combiner_performance"
+    dispatch_rule_set:
+      model: "pyomo_dispatch_generic_converter"
+    model_inputs:
+      performance_parameters:
+        commodity: "hydrogen"
+        commodity_units: "kg/h"
+      dispatch_rule_parameters:
+        commodity_name: "hydrogen"
+        commodity_storage_units: "kg/h"
