@@ -36,6 +36,9 @@ technologies:
         event_duration:  # omit or set to null to use static peak_window
           units: h  # any pandas timedelta unit: h, min, s, …
           val: 2  # battery eligible +/ - val h around the daily peak
+        # min_peak_separation:  # omit or set to null to allow any peak spacing
+        #   units: h
+        #   val: 4  # drop any eligible peak within this distance of a higher peak
         round_digits: 4
       cost_parameters:
         cost_year: 2024

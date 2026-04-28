@@ -75,6 +75,7 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
     n_control_window: float = field(default=24.0)
     signal_threshold_percentile: float = field(default=0.0, validator=range_val(0, 100))
     event_duration: dict = field(default=None)
+    min_peak_separation: dict = field(default=None)
 
     _INCENTIVE_TO_KWH: ClassVar[dict] = {"$/kWh": 1.0, "$/MWh": 1e-3, "$/Wh": 1e3}
 
@@ -100,19 +101,23 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
                 f"(int or float), got {type(self.performance_incentive.get('val')).__name__}."
             )
 
-        if self.event_duration is not None:
-            for key in ("units", "val"):
-                if key not in self.event_duration:
+        for field_name, value in (
+            ("event_duration", self.event_duration),
+            ("min_peak_separation", self.min_peak_separation),
+        ):
+            if value is not None:
+                for key in ("units", "val"):
+                    if key not in value:
+                        raise ValueError(
+                            f"{field_name} is missing required key '{key}'. "
+                            "Expected dict with 'units' (pandas timedelta unit string) "
+                            "and 'val' (int or float)."
+                        )
+                if not isinstance(value["val"], int | float):
                     raise ValueError(
-                        f"event_duration is missing required key '{key}'. "
-                        "Expected dict with 'units' (pandas timedelta unit string) "
-                        "and 'val' (int or float)."
+                        f"{field_name} 'val' must be a numeric value "
+                        f"(int or float), got {type(value['val']).__name__}."
                     )
-            if not isinstance(self.event_duration["val"], int | float):
-                raise ValueError(
-                    "event_duration 'val' must be a numeric value "
-                    f"(int or float), got {type(self.event_duration['val']).__name__}."
-                )
 
 
 class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseClass):
@@ -242,9 +247,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
         The threshold percentile is computed from ``signal_window`` values
         that fall inside ``dispatch_mask`` (i.e. the current dispatch
-        window). This ensures the percentile is relative to in-window
-        signals, not the full rolling window — so the highest signal
-        outside the dispatch window cannot silently block all dispatch.
+        window).
         When ``dispatch_mask`` is ``None`` the full ``signal_window`` is
         used. When ``signal_threshold_percentile`` is 0.0 all timesteps
         are eligible.
@@ -261,40 +264,51 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             np.ndarray: Boolean array of shape ``(len(signal_window),)``.
                 ``True`` where ``signal_t >= threshold``.
         """
-        eligible = np.ones(len(signal_window), dtype=bool)
+        mask = (
+            dispatch_mask if dispatch_mask is not None else np.ones(len(signal_window), dtype=bool)
+        )
 
-        if self.config.signal_threshold_percentile > 0.0:
-            if dispatch_mask is not None and dispatch_mask.any():
-                reference_signals = signal_window[dispatch_mask]
-            else:
-                reference_signals = signal_window
-            threshold = np.percentile(reference_signals, self.config.signal_threshold_percentile)
-            eligible = signal_window >= threshold
+        if self.config.signal_threshold_percentile == 0.0 or not mask.any():
+            return mask.copy()
+
+        threshold = np.percentile(signal_window[mask], self.config.signal_threshold_percentile)
+        eligible = mask & (signal_window >= threshold)
+
+        if self.config.min_peak_separation is not None and eligible.any():
+            sep_steps = (
+                pd.Timedelta(
+                    value=self.config.min_peak_separation["val"],
+                    unit=self.config.min_peak_separation["units"],
+                ).total_seconds()
+                / self.dt_seconds
+            )
+            # Greedily keep peaks from highest to lowest signal, dropping any peak
+            # that falls within sep_steps of an already-kept peak.
+            peak_indices = np.where(eligible)[0]
+            order = np.argsort(-signal_window[peak_indices])
+            kept: list[int] = []
+            for idx in peak_indices[order]:
+                if all(abs(int(idx) - k) >= sep_steps for k in kept):
+                    kept.append(int(idx))
+            eligible = np.zeros(len(signal_window), dtype=bool)
+            eligible[kept] = True
 
         return eligible
 
     def _compute_event_window_mask(
         self,
-        signal_window: np.ndarray,
-        in_peak_window_w: np.ndarray,
+        eligible_mask: np.ndarray,
         window_start: int,
     ) -> np.ndarray:
-        """Build a dispatch-eligible mask centered on each day's peak signal.
+        """Expand each eligible peak timestep by ±event_duration/2.
 
-        For each calendar day in the rolling window the highest-signal
-        timestep within ``in_peak_window_w`` is found. Every timestep
-        whose distance (in seconds) from that peak is at most
-        ``event_duration / 2`` is marked eligible. The resulting window
-        may extend beyond the original ``peak_window`` boundaries.
-
-        When ``event_duration`` is ``None`` the method returns
-        ``in_peak_window_w`` unchanged so existing behavior is preserved.
+        For each calendar day, every True timestep in ``eligible_mask`` is
+        treated as a peak and all timesteps within ``event_duration / 2``
+        of it are marked eligible. When ``event_duration`` is ``None``
+        returns ``eligible_mask`` unchanged.
 
         Args:
-            signal_window (np.ndarray): Signal values for the current
-                rolling window, shape ``(window_len,)``.
-            in_peak_window_w (np.ndarray): Boolean mask indicating which
-                timesteps fall inside the configured ``peak_window``,
+            eligible_mask (np.ndarray): Boolean mask of peak timesteps,
                 shape ``(window_len,)``.
             window_start (int): Index of the first timestep of this
                 window into ``self.time_index``.
@@ -303,35 +317,20 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             np.ndarray: Boolean mask of shape ``(window_len,)``.
         """
         if self.config.event_duration is None:
-            return in_peak_window_w.copy()
+            return eligible_mask.copy()
 
-        window_len = len(signal_window)
-        half_duration_s = (
+        half_steps = (
             pd.Timedelta(
                 value=self.config.event_duration["val"],
                 unit=self.config.event_duration["units"],
             ).total_seconds()
             / 2.0
+            / self.dt_seconds
         )
-        event_mask = np.zeros(window_len, dtype=bool)
-
-        window_times = self.time_index[window_start : window_start + window_len]
-        dates = pd.DatetimeIndex(window_times).normalize()
-
-        for date in dates.unique():
-            day_indices = np.where(dates == date)[0]
-            peak_indices = [i for i in day_indices if in_peak_window_w[i]]
-
-            if not peak_indices:
-                continue
-
-            peak_t = peak_indices[int(np.argmax(signal_window[peak_indices]))]
-
-            for i in range(window_len):
-                if abs(i - peak_t) * self.dt_seconds <= half_duration_s:
-                    event_mask[i] = True
-
-        return event_mask
+        indices = np.arange(len(eligible_mask))
+        peak_indices = np.where(eligible_mask)[0]
+        distances = np.abs(indices[:, None] - peak_indices[None, :])
+        return (distances <= half_steps).any(axis=1)
 
     def pyomo_setup(self, discrete_inputs):
         """Return the rolling-horizon dispatch solver callable.
@@ -485,18 +484,9 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         in_peak_window_w = self.in_peak_window[w]
         month_ids_w = self.month_ids[w]
         signal_w = np.asarray(self.config.supervisory_signal, dtype=float)[w]
-        dispatch_window_w = self._compute_event_window_mask(
-            signal_w, in_peak_window_w, window_start
-        )
-        # When event_duration is set the event window itself encodes "dispatch here"
-        # (it is already centered on the highest-signal peak).  Applying an
-        # additional signal-percentile filter on top would restrict dispatch to
-        # just one timestep, defeating the point of the duration.  So within an
-        # event-duration run, every timestep inside the event window is eligible.
-        if self.config.event_duration is not None:
-            eligible_t_w = dispatch_window_w.copy()
-        else:
-            eligible_t_w = self._compute_eligible_mask(signal_w, dispatch_window_w)
+        eligible_t_w = self._compute_eligible_mask(signal_w, in_peak_window_w)
+        dispatch_window_w = self._compute_event_window_mask(eligible_t_w, window_start)
+        eligible_t_w = dispatch_window_w
 
         months_in_window = np.unique(month_ids_w).tolist()
 

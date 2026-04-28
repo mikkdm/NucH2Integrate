@@ -15,10 +15,11 @@ def _make_controller():
     return object.__new__(PeakLoadManagementOptimizedStorageController)
 
 
-def _make_controller_with_config(config, n_timesteps=24):
+def _make_controller_with_config(config, n_timesteps=24, dt_seconds=3600):
     """Build a controller with pre-computed masks, bypassing OpenMDAO setup."""
     controller = _make_controller()
     controller.config = config
+    controller.dt_seconds = dt_seconds
     controller.updated_initial_soc = config.init_soc_fraction
     controller.time_index = pd.date_range("2024-01-01", periods=n_timesteps, freq="h")
     controller.in_peak_window = controller._compute_peak_window_mask()
@@ -112,7 +113,7 @@ def test_compute_month_ids():
 def test_compute_eligible_mask_zero_percentile_all_eligible():
     """All timesteps are eligible when signal_threshold_percentile=0."""
     controller = _make_controller()
-    controller.config = SimpleNamespace(signal_threshold_percentile=0.0)
+    controller.config = SimpleNamespace(signal_threshold_percentile=0.0, min_peak_separation=None)
     signal = np.array([1.0, 5.0, 3.0, 2.0, 8.0])
     mask = controller._compute_eligible_mask(signal)
     assert isinstance(mask, np.ndarray)
@@ -125,7 +126,7 @@ def test_compute_eligible_mask_zero_percentile_all_eligible():
 def test_compute_eligible_mask_50th_percentile():
     """Only values at or above the 50th percentile are eligible."""
     controller = _make_controller()
-    controller.config = SimpleNamespace(signal_threshold_percentile=50.0)
+    controller.config = SimpleNamespace(signal_threshold_percentile=50.0, min_peak_separation=None)
     signal = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
     mask = controller._compute_eligible_mask(signal)
     expected = signal >= np.percentile(signal, 50.0)
@@ -136,7 +137,7 @@ def test_compute_eligible_mask_50th_percentile():
 def test_compute_eligible_mask_100th_percentile_only_max_eligible():
     """Only the maximum value(s) are eligible at percentile=100."""
     controller = _make_controller()
-    controller.config = SimpleNamespace(signal_threshold_percentile=100.0)
+    controller.config = SimpleNamespace(signal_threshold_percentile=100.0, min_peak_separation=None)
     signal = np.array([1.0, 2.0, 10.0, 3.0, 10.0])
     mask = controller._compute_eligible_mask(signal)
     expected = np.array([False, False, True, False, True])
@@ -147,7 +148,7 @@ def test_compute_eligible_mask_100th_percentile_only_max_eligible():
 def test_compute_eligible_mask_uniform_signal_all_eligible():
     """All timesteps are eligible when the signal is uniform, regardless of percentile."""
     controller = _make_controller()
-    controller.config = SimpleNamespace(signal_threshold_percentile=75.0)
+    controller.config = SimpleNamespace(signal_threshold_percentile=75.0, min_peak_separation=None)
     signal = np.full(10, 5.0)
     mask = controller._compute_eligible_mask(signal)
     assert mask.all()
@@ -233,6 +234,51 @@ def test_optimizer_dispatch_respects_soc_constraints(base_config):
         soc += charge - discharge
         assert soc >= base_config.min_soc_fraction * base_config.max_capacity
         assert soc <= base_config.max_soc_fraction * base_config.max_capacity
+
+
+@pytest.mark.unit
+def test_compute_eligible_mask_min_peak_separation_drops_nearby_peak():
+    """A lower peak within min_peak_separation of a higher peak is dropped."""
+    controller = _make_controller()
+    controller.config = SimpleNamespace(
+        signal_threshold_percentile=0.0,
+        min_peak_separation={"units": "h", "val": 3},
+    )
+    controller.dt_seconds = 3600
+    # t=5 (signal=10) and t=7 (signal=8) are 2h apart — below the 3h threshold
+    signal = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 1.0, 8.0, 1.0, 1.0])
+    mask = controller._compute_eligible_mask(signal)
+    assert mask[5], "higher peak should be kept"
+    assert not mask[7], "lower peak within separation should be dropped"
+
+
+@pytest.mark.unit
+def test_compute_eligible_mask_min_peak_separation_keeps_far_peaks():
+    """Peaks separated by more than min_peak_separation are both kept."""
+    controller = _make_controller()
+    controller.config = SimpleNamespace(
+        signal_threshold_percentile=0.0,
+        min_peak_separation={"units": "h", "val": 3},
+    )
+    controller.dt_seconds = 3600
+    # t=2 (signal=10) and t=6 (signal=8) are 4h apart — above the 3h threshold
+    signal = np.array([1.0, 1.0, 10.0, 1.0, 1.0, 1.0, 8.0, 1.0, 1.0, 1.0])
+    mask = controller._compute_eligible_mask(signal)
+    assert mask[2], "first peak should be kept"
+    assert mask[6], "second peak far enough away should also be kept"
+
+
+@pytest.mark.unit
+def test_compute_eligible_mask_min_peak_separation_none_no_pruning():
+    """min_peak_separation=None leaves all percentile-eligible peaks unchanged."""
+    controller = _make_controller()
+    controller.config = SimpleNamespace(
+        signal_threshold_percentile=0.0,
+        min_peak_separation=None,
+    )
+    signal = np.array([1.0, 5.0, 6.0, 5.0, 1.0])
+    mask = controller._compute_eligible_mask(signal)
+    assert mask.all()
 
 
 @pytest.mark.regression
