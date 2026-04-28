@@ -13,7 +13,7 @@ technologies:
         commodity: electricity
         commodity_rate_units: kW
         max_charge_rate: 300.0  # kW rated power
-        max_capacity: 1200.0  # kWh usable capacity (4-hour battery)
+        max_capacity: 2000.0  # kWh usable capacity (4-hour battery)
         max_soc_fraction: 0.90
         min_soc_fraction: 0.10
         init_soc_fraction: 0.90
@@ -25,17 +25,17 @@ technologies:
         system_commodity_interface_limit: 1.0e9
         supervisory_signal: !include demand_profiles/supervisory_signal.yaml
         peak_window:
-          start: 14:00:00  # 2 pm MDT
-          end: 18:00:00  # 6 pm MDT
+          start: 12:00:00  # 2 pm MDT
+          end: 20:00:00  # 6 pm MDT
         performance_incentive:
           units: $/kWh  # also accepts $/MWh or $/Wh
           val: 14.0
         n_max_events: 10  # maximum discharge events per month
         signal_threshold_percentile: 95.0  # only dispatch when LMP >= this percentile
-        n_control_window: 10  # hours; converted to timesteps using simulation dt
+        n_control_window: 24  # hours; converted to timesteps using simulation dt
         event_duration:  # omit or set to null to use static peak_window
-          units: h  # any pandas timedelta unit: h, min, s, …
-          val: 2  # battery eligible +/ - val h around the daily peak
+          units: h  # any pandas timedelta unit: h, min, s,
+          val: 4  # battery eligible +/ - val h around the daily peak
         # min_peak_separation:  # omit or set to null to allow any peak spacing
         #   units: h
         #   val: 4  # drop any eligible peak within this distance of a higher peak

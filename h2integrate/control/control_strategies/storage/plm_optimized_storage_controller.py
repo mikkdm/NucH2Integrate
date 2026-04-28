@@ -402,7 +402,9 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 )
 
                 for t in range(window_len):
-                    if pyomo.value(self.dr_model.discharge[t]) > 0.5:
+                    discharging = pyomo.value(self.dr_model.discharge[t]) > 0.5
+                    prev_discharging = t > 0 and pyomo.value(self.dr_model.discharge[t - 1]) > 0.5
+                    if discharging and not prev_discharging:  # rising edge = new event
                         m = int(month_ids_w[t])
                         events_used_per_month[m] = events_used_per_month.get(m, 0) + 1
 
