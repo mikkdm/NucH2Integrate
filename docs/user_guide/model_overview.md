@@ -289,7 +289,7 @@ Below summarizes the available performance, cost, and financial models for each 
     - `'DemandOpenLoopStorageController'`: open-loop control; manages resource flow based on demand and storage constraints
     - `'HeuristicLoadFollowingStorageController'`: open-loop control that works on a time window basis to set dispatch commands; uses Pyomo
     - `'PeakLoadManagementHeuristicOpenLoopStorageController'`: open-loop control that reduces peaks rather than trying to meet a load
-    - `'PLMOptimizedStorageController'`: optimized controller for demand response that works on a time window basis. 
+    - `'PeakLoadManagementOptimizedStorageController'`: optimized controller for demand response that works on a time window basis.
 - Optimized Dispatch:
     - `'OptimizedDispatchStorageController'`: optimization-based dispatch using Pyomo
 

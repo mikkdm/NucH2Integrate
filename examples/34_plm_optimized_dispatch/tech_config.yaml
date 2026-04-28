@@ -7,36 +7,40 @@ technologies:
     cost_model:
       model: ATBBatteryCostModel
     control_strategy:
-      model: PLMOptimizedStorageController
+      model: PeakLoadManagementOptimizedStorageController
     model_inputs:
       shared_parameters:
         commodity: electricity
         commodity_rate_units: kW
-        max_charge_rate: 300.0          # kW rated power
-        max_capacity: 1200.0            # kWh usable capacity (4-hour battery)
+        max_charge_rate: 300.0  # kW rated power
+        max_capacity: 1200.0  # kWh usable capacity (4-hour battery)
         max_soc_fraction: 0.90
         min_soc_fraction: 0.10
         init_soc_fraction: 0.90
         charge_efficiency: 0.95
         discharge_efficiency: 0.95
-        
       performance_parameters:
-        demand_profile: 0.0             
+        demand_profile: 0.0
       control_parameters:
         system_commodity_interface_limit: 1.0e9
         supervisory_signal: !include demand_profiles/supervisory_signal.yaml
         peak_window:
-          start: "14:00:00"             # 2 pm MDT
-          end: "18:00:00"               # 6 pm MDT
-        performance_incentive: 14.0     # $/kWh (scaled by dt per dispatched timestep)
-        n_max_events: 10                # maximum discharge events per month
+          start: 14:00:00  # 2 pm MDT
+          end: 18:00:00  # 6 pm MDT
+        performance_incentive:
+          units: $/kWh  # also accepts $/MWh or $/Wh
+          val: 14.0
+        n_max_events: 10  # maximum discharge events per month
         signal_threshold_percentile: 95.0  # only dispatch when LMP >= this percentile
-        n_control_window: 10      # number of time steps in the control window (e.g., 10 hours)
+        n_control_window: 10  # hours; converted to timesteps using simulation dt
+        event_duration:  # omit or set to null to use static peak_window
+          units: h  # any pandas timedelta unit: h, min, s, …
+          val: 2  # battery eligible +/ - val h around the daily peak
         round_digits: 4
       cost_parameters:
         cost_year: 2024
-        energy_capex: 408               # $/kWh  (2024 ATB)
-        power_capex: 379                # $/kW
+        energy_capex: 408  # $/kWh  (2024 ATB)
+        power_capex: 379  # $/kW
         opex_fraction: 0.025
   grid_buy:
     performance_model:
@@ -45,10 +49,10 @@ technologies:
       model: GridCostModel
     model_inputs:
       shared_parameters:
-        interconnection_size: 100000    # kW
+        interconnection_size: 100000  # kW
       cost_parameters:
         cost_year: 2024
         fixed_interconnection_cost: 0.0
         interconnection_capex_per_kw: 0.0
         interconnection_opex_per_kw: 0.0
-        electricity_buy_price: 0.09     # $/kWh
+        electricity_buy_price: 0.09  # $/kWh

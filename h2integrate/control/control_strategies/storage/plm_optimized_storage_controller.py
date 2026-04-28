@@ -1,28 +1,26 @@
-from datetime import datetime, timedelta
+from typing import Any, ClassVar
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import pyomo.environ as pyomo
 from attrs import field, define
 
-from h2integrate.core.utilities import merge_shared_inputs
-from h2integrate.core.validators import range_val
+from h2integrate.core.utilities import merge_shared_inputs, build_time_series_from_plant_config
+from h2integrate.core.validators import range_val, has_required_keys
+from h2integrate.control.control_strategies.controller_opt_problem_state import DispatchProblemState
 from h2integrate.control.control_strategies.pyomo_storage_controller_baseclass import (
     SolverOptions,
     PyomoStorageControllerBaseClass,
     PyomoStorageControllerBaseConfig,
 )
-from h2integrate.control.control_strategies.controller_opt_problem_state import (
-    DispatchProblemState,
-)
-from matplotlib import pyplot as plt
 
 
 @define
-class PLMOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
+class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
     """Configuration for the PLM DR optimized storage controller.
 
-    Inherits base fields from ``PyomoControllerBaseConfig``:
+    Inherits base fields from ``PyomoStorageControllerBaseConfig``:
     ``max_capacity``, ``max_soc_fraction``, ``min_soc_fraction``,
     ``init_soc_fraction``, ``n_control_window``, ``commodity``,
     ``commodity_rate_units``, ``tech_name``,
@@ -35,34 +33,89 @@ class PLMOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
             length ``n_control_window`` per solve.
         peak_window (dict): Hours eligible for dispatch. Keys ``'start'``
             and ``'end'`` must be strings in ``HH:MM:SS`` format.
-        performance_incentive (float): Incentive revenue in $/kWh —
-            multiplied by ``dt`` (in hours) per dispatched timestep.
+        performance_incentive (dict): Incentive revenue expressed as a
+            ``{units, val}`` dict. ``units`` must be one of ``'$/kWh'``,
+            ``'$/MWh'``, or ``'$/Wh'``; ``val`` is the numeric amount.
+            Example: ``{units: '$/kWh', val: 14.0}``.
         charge_efficiency (float): Charge efficiency in [0, 1].
             Defaults to 1.0.
         discharge_efficiency (float): Discharge efficiency in [0, 1].
             Defaults to 1.0.
         n_max_events (int): Maximum discharge events per calendar month.
             Defaults to 10.
-        n_control_window (int): Number of timesteps per rolling solve
-            window. Defaults to ``24`` (one day).
+        n_control_window (float): Rolling window size in **hours**.
+            Converted to an integer timestep count during ``setup()``
+            using the simulation ``dt``, so the same value works at any
+            resolution. Example: ``10`` at a 30-min ``dt`` gives a
+            20-timestep window. Defaults to ``24``.
         signal_threshold_percentile (float): Percentile (0-100) used to
             compute the signal threshold for each rolling window. Only
-            hours at or above this percentile of the window signal are
-            eligible for dispatch. Defaults to 0.0 (all hours eligible).
+            timesteps at or above this percentile of the window signal are
+            eligible for dispatch. Defaults to 0.0 (all timesteps eligible).
+        event_duration (dict): Total dispatch-event duration
+            expressed as a ``{units, val}`` dict, where ``units`` is any
+            pandas timedelta unit string (e.g. ``'h'``, ``'min'``,
+            ``'s'``) and ``val`` is the numeric amount. When set, the
+            eligible dispatch window is computed dynamically per calendar
+            day: the peak-signal timestep within ``peak_window`` is
+            located and every timestep within ``event_duration / 2`` of
+            that peak is marked eligible (the window may extend
+            beyond the static ``peak_window`` boundaries). When ``None``
+            (default) the static ``peak_window`` mask is used unchanged.
+            Example: ``{units: 'h', val: 4}`` is +/- 2 h around the daily peak.
     """
 
     max_charge_rate: float = field()
     supervisory_signal: list = field()
     peak_window: dict = field()
-    performance_incentive: float = field()
+    performance_incentive: dict = field(validator=has_required_keys(["units", "val"]))
     charge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     discharge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     n_max_events: int = field(default=10)
-    n_control_window: int = field(default=24)  # one month of hourly data
-    signal_threshold_percentile: float = field(default=0.0, validator=range_val(0,100)) # make sure this is valid
+    n_control_window: float = field(default=24.0)
+    signal_threshold_percentile: float = field(default=0.0, validator=range_val(0, 100))
+    event_duration: dict = field(default=None)
+
+    _INCENTIVE_TO_KWH: ClassVar[dict] = {"$/kWh": 1.0, "$/MWh": 1e-3, "$/Wh": 1e3}
+
+    def __attrs_post_init__(self):
+        # Make sure n_control_window is an int
+        self.n_control_window = int(round(self.n_control_window))
+        super().__attrs_post_init__()
+
+        for key in ("units", "val"):
+            if key not in self.performance_incentive:
+                raise ValueError(
+                    f"performance_incentive is missing required key '{key}'. "
+                    "Expected dict with 'units' (e.g. '$/kWh') and 'val' (numeric)."
+                )
+        if self.performance_incentive["units"] not in self._INCENTIVE_TO_KWH:
+            raise ValueError(
+                f"performance_incentive 'units' must be one of "
+                f"{list(self._INCENTIVE_TO_KWH)}, got {self.performance_incentive['units']}."
+            )
+        if not isinstance(self.performance_incentive.get("val"), int | float):
+            raise ValueError(
+                "performance_incentive 'val' must be a numeric value "
+                f"(int or float), got {type(self.performance_incentive.get('val')).__name__}."
+            )
+
+        if self.event_duration is not None:
+            for key in ("units", "val"):
+                if key not in self.event_duration:
+                    raise ValueError(
+                        f"event_duration is missing required key '{key}'. "
+                        "Expected dict with 'units' (pandas timedelta unit string) "
+                        "and 'val' (int or float)."
+                    )
+            if not isinstance(self.event_duration["val"], int | float):
+                raise ValueError(
+                    "event_duration 'val' must be a numeric value "
+                    f"(int or float), got {type(self.event_duration['val']).__name__}."
+                )
 
 
-class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
+class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseClass):
     """Demand-response storage controller using a rolling-horizon MILP.
 
     Each call to the dispatch solver iterates over the full simulation in
@@ -73,6 +126,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
     as the initial SOC of the next window.
     """
 
+    dr_model: Any
+    problem_state: DispatchProblemState
+
     def setup(self):
         """Initialize config, register OpenMDAO inputs, and pre-compute static masks.
 
@@ -80,7 +136,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             ValueError: If the length of the time series built from
                 ``plant_config`` does not match ``n_timesteps``.
         """
-        self.config = PLMOptimizedControllerConfig.from_dict(
+        self.config = PeakLoadManagementOptimizedControllerConfig.from_dict(
             merge_shared_inputs(self.options["tech_config"]["model_inputs"], "control")
         )
 
@@ -100,6 +156,17 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         sim = self.options["plant_config"]["plant"]["simulation"]
         self.n_timesteps = int(sim["n_timesteps"])
         self.dt_seconds = int(sim["dt"])
+
+        # n_control_window is stored in hours; convert to timesteps now that dt is known.
+        n_cw_steps = max(1, int(round(self.config.n_control_window * 3600 / self.dt_seconds)))
+        object.__setattr__(self.config, "n_control_window", n_cw_steps)
+        scil = self.config.system_commodity_interface_limit
+        scil_list: list[float] = list(scil) if isinstance(scil, list | tuple) else [float(scil)]
+        if len(scil_list) != n_cw_steps:
+            object.__setattr__(
+                self.config, "system_commodity_interface_limit", [scil_list[0]] * n_cw_steps
+            )
+
         super().setup()
 
         self.updated_initial_soc = self.config.init_soc_fraction
@@ -109,7 +176,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             "commodity_storage_units": self.config.commodity_rate_units,
         }
 
-        self.time_index = self._build_time_index(self.options["plant_config"])
+        self.time_index = build_time_series_from_plant_config(
+            self.options["plant_config"]
+        )  # DatetimeIndex of length n_timesteps
 
         if len(self.time_index) != self.n_timesteps:
             raise ValueError(
@@ -117,29 +186,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             )
 
         self.in_peak_window = self._compute_peak_window_mask()  # bool array, shape (T,)
-        self.month_ids = self._compute_month_ids()              # int array,  shape (T,)
-
-    @staticmethod
-    def _build_time_index(plant_config: dict) -> pd.DatetimeIndex:
-        """Build a DatetimeIndex from simulation settings in plant_config.
-
-        Args:
-            plant_config (dict): Plant configuration dict. Must contain
-                ``plant.simulation`` with keys ``n_timesteps`` (int),
-                ``dt`` (int, seconds), ``timezone`` (int),
-                and ``start_time`` (str).
-
-        Returns:
-            pd.DatetimeIndex: DatetimeIndex of length ``n_timesteps`` spaced
-            ``dt`` seconds apart, starting at ``start_time`` in the given timezone.
-        """
-        sim = plant_config["plant"]["simulation"]
-        n_timesteps = int(sim["n_timesteps"])
-        dt_seconds = int(sim["dt"])
-        tz = int(sim["timezone"])
-        start = pd.Timestamp(sim["start_time"], tz=tz)
-        freq = pd.to_timedelta(dt_seconds, unit="s")
-        return pd.date_range(start=start, periods=n_timesteps, freq=freq)
+        self.month_ids = self._compute_month_ids()  # int array,  shape (T,)
 
     def _parse_peak_window(self) -> tuple:
         """Parse the ``peak_window`` config entry into ``datetime.time`` objects.
@@ -186,16 +233,29 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         """
         return pd.DatetimeIndex(self.time_index).month.to_numpy()
 
-    def _compute_eligible_mask(self, signal_window: np.ndarray) -> np.ndarray:
+    def _compute_eligible_mask(
+        self,
+        signal_window: np.ndarray,
+        dispatch_mask: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Build a boolean mask for timesteps whose signal meets the dispatch threshold.
 
-        The threshold is derived only from ``signal_window``. It does not
-        assume the full simulation signal is known in advance. When
-        ``signal_threshold_percentile`` is 0.0 all hours are eligible.
+        The threshold percentile is computed from ``signal_window`` values
+        that fall inside ``dispatch_mask`` (i.e. the current dispatch
+        window). This ensures the percentile is relative to in-window
+        signals, not the full rolling window — so the highest signal
+        outside the dispatch window cannot silently block all dispatch.
+        When ``dispatch_mask`` is ``None`` the full ``signal_window`` is
+        used. When ``signal_threshold_percentile`` is 0.0 all timesteps
+        are eligible.
 
         Args:
             signal_window (np.ndarray): Signal values for the current
                 rolling window.
+            dispatch_mask (np.ndarray | None): Boolean mask of shape
+                ``(len(signal_window),)`` indicating which timesteps
+                belong to the current dispatch window. Defaults to
+                ``None`` (use full window).
 
         Returns:
             np.ndarray: Boolean array of shape ``(len(signal_window),)``.
@@ -204,18 +264,80 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         eligible = np.ones(len(signal_window), dtype=bool)
 
         if self.config.signal_threshold_percentile > 0.0:
-            threshold = np.percentile(
-                signal_window, self.config.signal_threshold_percentile
-            )
+            if dispatch_mask is not None and dispatch_mask.any():
+                reference_signals = signal_window[dispatch_mask]
+            else:
+                reference_signals = signal_window
+            threshold = np.percentile(reference_signals, self.config.signal_threshold_percentile)
             eligible = signal_window >= threshold
 
         return eligible
+
+    def _compute_event_window_mask(
+        self,
+        signal_window: np.ndarray,
+        in_peak_window_w: np.ndarray,
+        window_start: int,
+    ) -> np.ndarray:
+        """Build a dispatch-eligible mask centered on each day's peak signal.
+
+        For each calendar day in the rolling window the highest-signal
+        timestep within ``in_peak_window_w`` is found. Every timestep
+        whose distance (in seconds) from that peak is at most
+        ``event_duration / 2`` is marked eligible. The resulting window
+        may extend beyond the original ``peak_window`` boundaries.
+
+        When ``event_duration`` is ``None`` the method returns
+        ``in_peak_window_w`` unchanged so existing behavior is preserved.
+
+        Args:
+            signal_window (np.ndarray): Signal values for the current
+                rolling window, shape ``(window_len,)``.
+            in_peak_window_w (np.ndarray): Boolean mask indicating which
+                timesteps fall inside the configured ``peak_window``,
+                shape ``(window_len,)``.
+            window_start (int): Index of the first timestep of this
+                window into ``self.time_index``.
+
+        Returns:
+            np.ndarray: Boolean mask of shape ``(window_len,)``.
+        """
+        if self.config.event_duration is None:
+            return in_peak_window_w.copy()
+
+        window_len = len(signal_window)
+        half_duration_s = (
+            pd.Timedelta(
+                value=self.config.event_duration["val"],
+                unit=self.config.event_duration["units"],
+            ).total_seconds()
+            / 2.0
+        )
+        event_mask = np.zeros(window_len, dtype=bool)
+
+        window_times = self.time_index[window_start : window_start + window_len]
+        dates = pd.DatetimeIndex(window_times).normalize()
+
+        for date in dates.unique():
+            day_indices = np.where(dates == date)[0]
+            peak_indices = [i for i in day_indices if in_peak_window_w[i]]
+
+            if not peak_indices:
+                continue
+
+            peak_t = peak_indices[int(np.argmax(signal_window[peak_indices]))]
+
+            for i in range(window_len):
+                if abs(i - peak_t) * self.dt_seconds <= half_duration_s:
+                    event_mask[i] = True
+
+        return event_mask
 
     def pyomo_setup(self, discrete_inputs):
         """Return the rolling-horizon dispatch solver callable.
 
         Args:
-            discrete_inputs (dict): OpenMDAO discrete inputs. 
+            discrete_inputs (dict): OpenMDAO discrete inputs.
 
         Returns:
             callable: ``pyomo_dispatch_solver(performance_model,
@@ -246,11 +368,11 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             # respected across window boundaries.
             events_used_per_month = {}
 
-            n_w = self.config.n_control_window
+            n_w: int = int(self.config.n_control_window)
             window_start_indices = list(range(0, self.n_timesteps, n_w))
 
             for window_start in window_start_indices:
-                window_len = min(n_w, self.n_timesteps - window_start)
+                window_len: int = min(n_w, self.n_timesteps - window_start)
 
                 n_windows = len(window_start_indices)
                 report_every = max(1, n_windows // 4)
@@ -315,13 +437,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
                 ``'max_charge_rate'`` and ``'storage_capacity'``.
         """
         if "max_charge_rate" in inputs:
-            object.__setattr__(
-                self.config, "max_charge_rate", float(inputs["max_charge_rate"][0])
-            )
+            object.__setattr__(self.config, "max_charge_rate", float(inputs["max_charge_rate"][0]))
         if "storage_capacity" in inputs:
-            object.__setattr__(
-                self.config, "max_capacity", float(inputs["storage_capacity"][0])
-            )
+            object.__setattr__(self.config, "max_capacity", float(inputs["storage_capacity"][0]))
 
     def _build_dr_model(
         self,
@@ -347,7 +465,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         Returns:
             pyomo.ConcreteModel: Fully formed MILP ready to solve.
         """
-        m = pyomo.ConcreteModel(name="plm_dr")
+        m: Any = pyomo.ConcreteModel(name="plm_dr")
 
         P_max = self.config.max_charge_rate
         E_max = self.config.max_capacity * (
@@ -357,22 +475,40 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         eta_d = self.config.discharge_efficiency
         soc_max = self.config.max_soc_fraction
         soc_min = self.config.min_soc_fraction
-        incentive = self.config.performance_incentive
+        incentive = (
+            self.config.performance_incentive["val"]
+            * self.config._INCENTIVE_TO_KWH[self.config.performance_incentive["units"].strip()]
+        )
         N_max = self.config.n_max_events
 
         w = slice(window_start, window_start + window_len)
         in_peak_window_w = self.in_peak_window[w]
         month_ids_w = self.month_ids[w]
         signal_w = np.asarray(self.config.supervisory_signal, dtype=float)[w]
-        eligible_t_w = self._compute_eligible_mask(signal_w)
+        dispatch_window_w = self._compute_event_window_mask(
+            signal_w, in_peak_window_w, window_start
+        )
+        # When event_duration is set the event window itself encodes "dispatch here"
+        # (it is already centered on the highest-signal peak).  Applying an
+        # additional signal-percentile filter on top would restrict dispatch to
+        # just one timestep, defeating the point of the duration.  So within an
+        # event-duration run, every timestep inside the event window is eligible.
+        if self.config.event_duration is not None:
+            eligible_t_w = dispatch_window_w.copy()
+        else:
+            eligible_t_w = self._compute_eligible_mask(signal_w, dispatch_window_w)
 
         months_in_window = np.unique(month_ids_w).tolist()
 
         m.T = pyomo.Set(initialize=range(window_len), doc="Timesteps in window")
         m.M = pyomo.Set(initialize=months_in_window, doc="Months in window")
 
-        m.discharge = pyomo.Var(m.T, domain=pyomo.Binary, doc="Discharge binary: 1 = discharging at timestep t")
-        m.charge = pyomo.Var(m.T, domain=pyomo.Binary, doc="Charge binary: 1 = charging at timestep t")
+        m.discharge = pyomo.Var(
+            m.T, domain=pyomo.Binary, doc="Discharge binary: 1 = discharging at timestep t"
+        )
+        m.charge = pyomo.Var(
+            m.T, domain=pyomo.Binary, doc="Charge binary: 1 = charging at timestep t"
+        )
         m.soc = pyomo.Var(
             m.T,
             domain=pyomo.NonNegativeReals,
@@ -389,7 +525,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         m.peak_window_only = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
-                mdl.discharge[t] == 0 if not in_peak_window_w[t] else pyomo.Constraint.Skip
+                mdl.discharge[t] == 0 if not dispatch_window_w[t] else pyomo.Constraint.Skip
             ),
         )
 
@@ -428,7 +564,7 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
         m.no_charge_in_window = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
-                mdl.charge[t] == 0 if in_peak_window_w[t] else pyomo.Constraint.Skip
+                mdl.charge[t] == 0 if dispatch_window_w[t] else pyomo.Constraint.Skip
             ),
         )
 
@@ -511,13 +647,9 @@ class PLMOptimizedStorageController(PyomoStorageControllerBaseClass):
             pyomo.opt.SolverResults: Raw results object from GLPK.
         """
         glpk_solver_options = {"cuts": None, "presol": None, "tmlim": 300}
-        solver_options = SolverOptions(
-            glpk_solver_options, log_name, user_solver_options, "log"
-        )
+        solver_options = SolverOptions(glpk_solver_options, log_name, user_solver_options, "log")
         with pyomo.SolverFactory("glpk") as solver:
-            results = solver.solve(
-                pyomo_model, options=solver_options.constructed, tee=False
-            )
+            results = solver.solve(pyomo_model, options=solver_options.constructed, tee=False)
         return results
 
     @property

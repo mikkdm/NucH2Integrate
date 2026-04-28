@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 from h2integrate.core.h2integrate_model import H2IntegrateModel
 
+
 EXAMPLE_DIR = Path(__file__).parent
 
 
@@ -27,9 +28,9 @@ percentile = model.technology_config["technologies"]["battery"]["model_inputs"][
 model.run()
 
 lmp = np.array(
-    model.technology_config["technologies"]["battery"]["model_inputs"][
-        "control_parameters"
-    ]["supervisory_signal"]
+    model.technology_config["technologies"]["battery"]["model_inputs"]["control_parameters"][
+        "supervisory_signal"
+    ]
 )[:N]
 
 sim = model.plant_config["plant"]["simulation"]
@@ -43,7 +44,19 @@ time_index = pd.date_range(start=start, periods=n_timesteps, freq=freq)
 battery_power = model.prob.get_val("battery.storage_electricity_discharge", units="kW")
 soc_pct = model.prob.get_val("battery.SOC", units="percent")
 
-peak_mask = (time_index.hour >= 14) & (time_index.hour <= 18)
+control_params = model.technology_config["technologies"]["battery"]["model_inputs"][
+    "control_parameters"
+]
+pw_cfg = control_params["peak_window"]
+event_dur_cfg = control_params.get("event_duration")
+
+pw_start_h = int(pw_cfg["start"].split(":")[0])
+pw_end_h = int(pw_cfg["end"].split(":")[0])
+
+half_td = None
+if event_dur_cfg is not None:
+    half_td = pd.Timedelta(value=event_dur_cfg["val"], unit=event_dur_cfg["units"]) / 2
+
 threshold_pct = np.percentile(lmp, percentile)
 discharge_mask = battery_power > 0
 
@@ -51,16 +64,35 @@ discharge_mask = battery_power > 0
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 fig, axes = plt.subplots(2, 1, sharex=True, figsize=(11, 7))
 days = pd.date_range(time_index[0].normalize(), periods=14, freq="D", tz=time_index.tz)
-time_window = 14 * 24
+time_window = min(n_timesteps, int(14 * 24 * 3600 / dt_seconds))  # 14 days
 
 
 def shade_peaks(ax):
     for day in days:
+        # light background: static peak_window
         ax.axvspan(
-            day + pd.Timedelta(hours=14),
-            day + pd.Timedelta(hours=18),
+            day + pd.Timedelta(hours=pw_start_h),
+            day + pd.Timedelta(hours=pw_end_h),
             color="orange",
             alpha=0.10,
+            linewidth=0,
+            zorder=0,
+        )
+        if half_td is None:
+            continue
+        # darker band: event window centered on the daily LMP peak
+        pw_start_ts = day + pd.Timedelta(hours=pw_start_h)
+        pw_end_ts = day + pd.Timedelta(hours=pw_end_h)
+        in_pw = (time_index >= pw_start_ts) & (time_index <= pw_end_ts)
+        if not in_pw.any():
+            continue
+        peak_idx = np.where(in_pw)[0][np.argmax(lmp[in_pw])]
+        peak_ts = time_index[peak_idx]
+        ax.axvspan(
+            peak_ts - half_td,
+            peak_ts + half_td,
+            color="darkorange",
+            alpha=0.30,
             linewidth=0,
             zorder=0,
         )

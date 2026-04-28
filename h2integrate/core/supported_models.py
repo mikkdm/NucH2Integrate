@@ -174,11 +174,11 @@ from h2integrate.control.control_strategies.storage.simple_openloop_controller i
 from h2integrate.control.control_strategies.storage.plm_openloop_storage_controller import (
     PeakLoadManagementHeuristicOpenLoopStorageController,
 )
-from h2integrate.control.control_strategies.storage.plm_optimized_storage_controller import (
-    PLMOptimizedStorageController,
-)
 from h2integrate.control.control_rules.storage.pyomo_storage_rule_min_operating_cost import (
     PyomoRuleStorageMinOperatingCosts,
+)
+from h2integrate.control.control_strategies.storage.plm_optimized_storage_controller import (
+    PeakLoadManagementOptimizedStorageController,
 )
 from h2integrate.control.control_rules.converters.generic_converter_min_operating_cost import (
     PyomoDispatchGenericConverterMinOperatingCosts,
@@ -301,7 +301,7 @@ supported_models = {
     "PeakLoadManagementHeuristicOpenLoopStorageController": (
         PeakLoadManagementHeuristicOpenLoopStorageController
     ),
-    "PLMOptimizedStorageController": (PLMOptimizedStorageController),
+    "PeakLoadManagementOptimizedStorageController": (PeakLoadManagementOptimizedStorageController),
     "HeuristicLoadFollowingStorageController": HeuristicLoadFollowingStorageController,
     "OptimizedDispatchStorageController": OptimizedDispatchStorageController,
     "GenericDemandComponent": GenericDemandComponent,
