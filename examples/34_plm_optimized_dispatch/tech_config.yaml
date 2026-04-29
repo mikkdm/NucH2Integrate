@@ -27,9 +27,7 @@ technologies:
         peak_window:
           start: 12:00:00  # 2 pm MDT
           end: 20:00:00  # 6 pm MDT
-        performance_incentive:
-          units: $/kWh  # also accepts $/MWh or $/Wh
-          val: 14.0
+        performance_incentive: 14.0  # $/kWh
         n_max_events: 10  # maximum discharge events per month
         signal_threshold_percentile: 95.0  # only dispatch when LMP >= this percentile
         n_control_window: 24  # hours; converted to timesteps using simulation dt

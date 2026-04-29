@@ -1,13 +1,14 @@
-from typing import Any, ClassVar
+from typing import Any
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import pyomo.environ as pyomo
 from attrs import field, define
+from pyomo.opt import SolverStatus, TerminationCondition
 
 from h2integrate.core.utilities import merge_shared_inputs, build_time_series_from_plant_config
-from h2integrate.core.validators import range_val, has_required_keys
+from h2integrate.core.validators import range_val
 from h2integrate.control.control_strategies.controller_opt_problem_state import DispatchProblemState
 from h2integrate.control.control_strategies.pyomo_storage_controller_baseclass import (
     SolverOptions,
@@ -18,7 +19,7 @@ from h2integrate.control.control_strategies.pyomo_storage_controller_baseclass i
 
 @define
 class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConfig):
-    """Configuration for the PLM DR optimized storage controller.
+    """Configuration for the Peak Load Management optimized storage controller.
 
     Inherits base fields from ``PyomoStorageControllerBaseConfig``:
     ``max_capacity``, ``max_soc_fraction``, ``min_soc_fraction``,
@@ -29,14 +30,11 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
     Attributes:
         max_charge_rate (float): Maximum charge and discharge rate (kW).
         supervisory_signal (list[float]): Price, demand, or price*demand
-            forecast time series. The rolling solver uses one window of
+            forecast time series. The rolling horizon solver uses one window of
             length ``n_control_window`` per solve.
         peak_window (dict): Hours eligible for dispatch. Keys ``'start'``
             and ``'end'`` must be strings in ``HH:MM:SS`` format.
-        performance_incentive (dict): Incentive revenue expressed as a
-            ``{units, val}`` dict. ``units`` must be one of ``'$/kWh'``,
-            ``'$/MWh'``, or ``'$/Wh'``; ``val`` is the numeric amount.
-            Example: ``{units: '$/kWh', val: 14.0}``.
+        performance_incentive (float): Incentive revenue in $/kWh.
         charge_efficiency (float): Charge efficiency in [0, 1].
             Defaults to 1.0.
         discharge_efficiency (float): Discharge efficiency in [0, 1].
@@ -56,19 +54,23 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
             expressed as a ``{units, val}`` dict, where ``units`` is any
             pandas timedelta unit string (e.g. ``'h'``, ``'min'``,
             ``'s'``) and ``val`` is the numeric amount. When set, the
-            eligible dispatch window is computed dynamically per calendar
-            day: the peak-signal timestep within ``peak_window`` is
-            located and every timestep within ``event_duration / 2`` of
+            peak-signal timestep within ``peak_window`` is located and
+            every timestep within ``event_duration / 2`` of
             that peak is marked eligible (the window may extend
             beyond the static ``peak_window`` boundaries). When ``None``
             (default) the static ``peak_window`` mask is used unchanged.
             Example: ``{units: 'h', val: 4}`` is +/- 2 h around the daily peak.
+        min_peak_separation (dict): Minimum separation between eligible
+            peaks, expressed as a ``{units, val}`` dict like
+            ``event_duration``. When set, the eligible timesteps identified
+            by ``signal_threshold_percentile`` are treated as peaks and
+            the first peak is chosen as eligible.
     """
 
     max_charge_rate: float = field()
     supervisory_signal: list = field()
     peak_window: dict = field()
-    performance_incentive: dict = field(validator=has_required_keys(["units", "val"]))
+    performance_incentive: float = field()
     charge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     discharge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     n_max_events: int = field(default=10)
@@ -77,29 +79,10 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
     event_duration: dict = field(default=None)
     min_peak_separation: dict = field(default=None)
 
-    _INCENTIVE_TO_KWH: ClassVar[dict] = {"$/kWh": 1.0, "$/MWh": 1e-3, "$/Wh": 1e3}
-
     def __attrs_post_init__(self):
         # Make sure n_control_window is an int
         self.n_control_window = int(round(self.n_control_window))
         super().__attrs_post_init__()
-
-        for key in ("units", "val"):
-            if key not in self.performance_incentive:
-                raise ValueError(
-                    f"performance_incentive is missing required key '{key}'. "
-                    "Expected dict with 'units' (e.g. '$/kWh') and 'val' (numeric)."
-                )
-        if self.performance_incentive["units"] not in self._INCENTIVE_TO_KWH:
-            raise ValueError(
-                f"performance_incentive 'units' must be one of "
-                f"{list(self._INCENTIVE_TO_KWH)}, got {self.performance_incentive['units']}."
-            )
-        if not isinstance(self.performance_incentive.get("val"), int | float):
-            raise ValueError(
-                "performance_incentive 'val' must be a numeric value "
-                f"(int or float), got {type(self.performance_incentive.get('val')).__name__}."
-            )
 
         for field_name, value in (
             ("event_duration", self.event_duration),
@@ -159,18 +142,12 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         )
 
         sim = self.options["plant_config"]["plant"]["simulation"]
-        self.n_timesteps = int(sim["n_timesteps"])
-        self.dt_seconds = int(sim["dt"])
+        self.n_timesteps = int(sim["n_timesteps"])  # number of "dt"s in the simulation
+        self.dt_seconds = int(sim["dt"])  # length of each timestep in seconds
 
         # n_control_window is stored in hours; convert to timesteps now that dt is known.
         n_cw_steps = max(1, int(round(self.config.n_control_window * 3600 / self.dt_seconds)))
         object.__setattr__(self.config, "n_control_window", n_cw_steps)
-        scil = self.config.system_commodity_interface_limit
-        scil_list: list[float] = list(scil) if isinstance(scil, list | tuple) else [float(scil)]
-        if len(scil_list) != n_cw_steps:
-            object.__setattr__(
-                self.config, "system_commodity_interface_limit", [scil_list[0]] * n_cw_steps
-            )
 
         super().setup()
 
@@ -191,7 +168,25 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             )
 
         self.in_peak_window = self._compute_peak_window_mask()  # bool array, shape (T,)
-        self.month_ids = self._compute_month_ids()  # int array,  shape (T,)
+        self.month_ids = self._compute_month_ids()  # int array, shape (T,)
+
+        # Computes the number of timesteps in an event based on event_duration and dt_seconds,
+        # rounded to nearest int and at least 1.
+        if self.config.event_duration is not None:
+            self.steps_per_event: int = max(
+                1,
+                int(
+                    round(
+                        pd.Timedelta(
+                            value=self.config.event_duration["val"],
+                            unit=self.config.event_duration["units"],
+                        ).total_seconds()
+                        / self.dt_seconds
+                    )
+                ),
+            )
+        else:
+            self.steps_per_event = 1
 
     def _parse_peak_window(self) -> tuple:
         """Parse the ``peak_window`` config entry into ``datetime.time`` objects.
@@ -251,6 +246,8 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         When ``dispatch_mask`` is ``None`` the full ``signal_window`` is
         used. When ``signal_threshold_percentile`` is 0.0 all timesteps
         are eligible.
+        If there are multiple timesteps above the threshold within a window and
+        ``min_peak_separation`` is set, only the first one is eligible.
 
         Args:
             signal_window (np.ndarray): Signal values for the current
@@ -274,7 +271,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         threshold = np.percentile(signal_window[mask], self.config.signal_threshold_percentile)
         eligible = mask & (signal_window >= threshold)
 
-        if self.config.min_peak_separation is not None and eligible.any():
+        if self.config.min_peak_separation is not None:
             sep_steps = (
                 pd.Timedelta(
                     value=self.config.min_peak_separation["val"],
@@ -282,13 +279,14 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 ).total_seconds()
                 / self.dt_seconds
             )
-            # Greedily keep peaks from highest to lowest signal, dropping any peak
-            # that falls within sep_steps of an already-kept peak.
-            peak_indices = np.where(eligible)[0]
-            order = np.argsort(-signal_window[peak_indices])
-            kept: list[int] = []
-            for idx in peak_indices[order]:
-                if all(abs(int(idx) - k) >= sep_steps for k in kept):
+            # Keep the first peak; drop any subsequent peaks
+            # within sep_steps of the last kept one.
+            # This is a greedy choice but subsequent iterations will
+            # use a smarter logic
+            kept = []
+            for idx in np.where(eligible)[0]:
+                if not kept or int(idx) - kept[-1] >= sep_steps:
+                    # Won't enter this condition if the peaks are too close together
                     kept.append(int(idx))
             eligible = np.zeros(len(signal_window), dtype=bool)
             eligible[kept] = True
@@ -298,11 +296,10 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
     def _compute_event_window_mask(
         self,
         eligible_mask: np.ndarray,
-        window_start: int,
     ) -> np.ndarray:
-        """Expand each eligible peak timestep by ±event_duration/2.
+        """Expand each eligible peak timestep by +/-event_duration/2.
 
-        For each calendar day, every True timestep in ``eligible_mask`` is
+        Every True timestep in ``eligible_mask`` is
         treated as a peak and all timesteps within ``event_duration / 2``
         of it are marked eligible. When ``event_duration`` is ``None``
         returns ``eligible_mask`` unchanged.
@@ -310,8 +307,6 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         Args:
             eligible_mask (np.ndarray): Boolean mask of peak timesteps,
                 shape ``(window_len,)``.
-            window_start (int): Index of the first timestep of this
-                window into ``self.time_index``.
 
         Returns:
             np.ndarray: Boolean mask of shape ``(window_len,)``.
@@ -319,7 +314,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         if self.config.event_duration is None:
             return eligible_mask.copy()
 
-        half_steps = (
+        half_event_steps = (
             pd.Timedelta(
                 value=self.config.event_duration["val"],
                 unit=self.config.event_duration["units"],
@@ -327,10 +322,12 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             / 2.0
             / self.dt_seconds
         )
-        indices = np.arange(len(eligible_mask))
         peak_indices = np.where(eligible_mask)[0]
-        distances = np.abs(indices[:, None] - peak_indices[None, :])
-        return (distances <= half_steps).any(axis=1)
+        event_mask = np.zeros(len(eligible_mask), dtype=bool)
+        for peak in peak_indices:
+            near_peak = np.abs(np.arange(len(eligible_mask)) - peak) <= half_event_steps
+            event_mask |= near_peak
+        return event_mask
 
     def pyomo_setup(self, discrete_inputs):
         """Return the rolling-horizon dispatch solver callable.
@@ -368,26 +365,23 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             events_used_per_month = {}
 
             n_w: int = int(self.config.n_control_window)
+            # Compute the starting index of each rolling window.
             window_start_indices = list(range(0, self.n_timesteps, n_w))
 
             for window_start in window_start_indices:
                 window_len: int = min(n_w, self.n_timesteps - window_start)
-
-                n_windows = len(window_start_indices)
-                report_every = max(1, n_windows // 4)
-                window_idx = window_start // n_w
-                if window_idx % report_every == 0:
-                    round(window_start / self.n_timesteps * 100)
-
                 month_ids_w = self.month_ids[window_start : window_start + window_len]
+                # Since this is a rolling horizon, we need to compute the remaining budget
+                # for the  next optimization call
                 remaining_budget = {
                     int(m): max(
                         0,
-                        self.config.n_max_events - events_used_per_month.get(int(m), 0),
+                        self.config.n_max_events
+                        - (events_used_per_month[int(m)] if int(m) in events_used_per_month else 0),
                     )
                     for m in np.unique(month_ids_w)
                 }
-
+                # Construct the MILP for this window
                 self.dr_model = self._build_dr_model(
                     window_start=window_start,
                     window_len=window_len,
@@ -396,18 +390,23 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 )
                 self.problem_state = DispatchProblemState()
 
+                # Solve the optimzation problem
                 self.solve_dispatch_model(
                     start_time=window_start,
                     n_days=self.n_timesteps // 24,
                 )
 
+                # Count new discharge events to track the monthly cap.
                 for t in range(window_len):
                     discharging = pyomo.value(self.dr_model.discharge[t]) > 0.5
                     prev_discharging = t > 0 and pyomo.value(self.dr_model.discharge[t - 1]) > 0.5
-                    if discharging and not prev_discharging:  # rising edge = new event
-                        m = int(month_ids_w[t])
-                        events_used_per_month[m] = events_used_per_month.get(m, 0) + 1
+                    if discharging and not prev_discharging:
+                        month = int(month_ids_w[t])
+                        if month not in events_used_per_month:
+                            events_used_per_month[month] = 0
+                        events_used_per_month[month] += 1
 
+                # Run the performance model for this window.
                 storage_out_window, soc_window = performance_model(
                     self.storage_dispatch_commands,
                     **performance_model_kwargs,
@@ -429,7 +428,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         """Sync OpenMDAO inputs into the config.
 
         Args:
-            inputs (dict): OpenMDAO inputs dict. Recognised keys are
+            inputs (dict): OpenMDAO inputs dict. Recognized keys are
                 ``'max_charge_rate'`` and ``'storage_capacity'``.
         """
         if "max_charge_rate" in inputs:
@@ -471,25 +470,28 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         eta_d = self.config.discharge_efficiency
         soc_max = self.config.max_soc_fraction
         soc_min = self.config.min_soc_fraction
-        incentive = (
-            self.config.performance_incentive["val"]
-            * self.config._INCENTIVE_TO_KWH[self.config.performance_incentive["units"].strip()]
-        )
+        incentive = self.config.performance_incentive
         N_max = self.config.n_max_events
 
+        # Only the timesteps within the current window are relevant
         w = slice(window_start, window_start + window_len)
         in_peak_window_w = self.in_peak_window[w]
         month_ids_w = self.month_ids[w]
         signal_w = np.asarray(self.config.supervisory_signal, dtype=float)[w]
+
+        # Eligible timesteps for discharge based on percentile
         eligible_t_w = self._compute_eligible_mask(signal_w, in_peak_window_w)
-        dispatch_window_w = self._compute_event_window_mask(eligible_t_w, window_start)
+        # Expand eligible timesteps into event windows based on event_duration
+        dispatch_window_w = self._compute_event_window_mask(eligible_t_w)
         eligible_t_w = dispatch_window_w
 
         months_in_window = np.unique(month_ids_w).tolist()
 
+        # Sets we need to iterate on in the constraints and objective
         m.T = pyomo.Set(initialize=range(window_len), doc="Timesteps in window")
         m.M = pyomo.Set(initialize=months_in_window, doc="Months in window")
 
+        # Things to solve for
         m.discharge = pyomo.Var(
             m.T, domain=pyomo.Binary, doc="Discharge binary: 1 = discharging at timestep t"
         )
@@ -503,12 +505,16 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             doc="State of charge SoC_t",
         )
 
+        # Incentive revenue is earned for every kWh discharged during the dispatch window,
+        # so we need the energy at every timestep to be in Kwh
         dt_hours = self.dt_seconds / 3600.0
         m.objective = pyomo.Objective(
             expr=-incentive * P_max * dt_hours * sum(m.discharge[t] for t in m.T),
             sense=pyomo.minimize,
         )
 
+        ## Constraints
+        # Discharge can only occur during the dispatch window.
         m.peak_window_only = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
@@ -516,22 +522,30 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             ),
         )
 
+        # Discharge can only occur at eligible timesteps.
         m.high_signal_only = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: mdl.discharge[t] <= int(eligible_t_w[t]),
         )
 
+        # There is limit on the number of events, not discharge timesteps.
+        # However, we know the number of timesteps in the event from steps_per_event,
+        # so we can indirectly limit the number of discharge timesteps in each month
+        # by multiplying the event cap by steps_per_event.
         def max_events_rule(mdl, month):
             ts_in_month = [t for t in mdl.T if month_ids_w[t] == month]
             if not ts_in_month:
                 return pyomo.Constraint.Skip
-            budget = remaining_budget.get(month, N_max)
-            return sum(mdl.discharge[t] for t in ts_in_month) <= budget
+            budget_steps = (
+                remaining_budget[month] if month in remaining_budget else N_max
+            ) * self.steps_per_event
+            return sum(mdl.discharge[t] for t in ts_in_month) <= budget_steps
 
         m.max_events = pyomo.Constraint(m.M, rule=max_events_rule)
 
         m.soc_init = pyomo.Constraint(expr=m.soc[0] == init_soc)
 
+        # Dynamics of the battery SOC evolution.
         def soc_evolution_rule(mdl, t):
             if t == 0:
                 return pyomo.Constraint.Skip
@@ -543,11 +557,13 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
         m.soc_evolution = pyomo.Constraint(m.T, rule=soc_evolution_rule)
 
+        # Can't charge and discharge at the same time.
         m.no_simultaneous = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: mdl.discharge[t] + mdl.charge[t] <= 1,
         )
 
+        # Can't charge in the dispatch window
         m.no_charge_in_window = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
@@ -571,7 +587,6 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             RuntimeError: If GLPK returns a not OK status or an
                 unacceptable termination condition.
         """
-        from pyomo.opt import SolverStatus, TerminationCondition
 
         solver_results = self.glpk_solve_call(self.dr_model)
 

@@ -63,63 +63,76 @@ tech_to_dispatch_connections: [
 
 This controller optimizes the dispatch of a Battery Energy Storage System (BESS) based on a pre-defined supervisory signal. This signal could be the Locational Marginal Price (LMP), a demand profile, or a $LMP\times demand$ product depending on the application. The objective is to maximize incentive payments to the battery, subject to constraints on the maximum number of dispatch events per month and on the battery state of charge.
 
+The controller works at any simulation timestep resolution (`dt`). All time-based parameters ( `event_duration`, `min_peak_separation`) are specified in physical time units (hours, minutes, etc.) and are internally converted to timesteps using `dt`.
+
 ## Definitions
 
 **Given:**
-- $\lambda_t$ := `supervisory_signal`: price, demand, or price $\times$ demand time series at time $t$
-- $\mathcal{W}$ := `peak_window`: set of hours eligible for dispatch (e.g., 12:00--19:00)
-- $\gamma$ := performance incentive (\$/kW per dispatch hour)
-- $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate, used as deemed capacity since the battery is assumed to always dispatch at full rated power
+- $\lambda_t$ := `supervisory_signal`: price, demand, or price $\times$ demand time series at timestep $t$
+- $\Delta t$ := simulation timestep duration (hours), derived from `dt` in the plant config
+- $\mathcal{W}$ := `peak_window`: set of timesteps eligible for dispatch (e.g., 12:00--20:00 each day)
+- $\lambda_*$ := signal threshold = `signal_threshold_percentile`-th percentile of $\lambda_t$ over $\mathcal{W}$
+- $\mathcal{E}$ := eligible peak timesteps: $\{t \in \mathcal{W} : \lambda_t \geq \lambda_*\}$, respecting `min_peak_separation`
+- $\mathcal{D}$ := dispatch window: union of $\pm\,\tfrac{\text{event\_duration}}{2}$ neighbourhoods around each peak in $\mathcal{E}$ (equals $\mathcal{E}$ when `event_duration` is `null`)
+- $\gamma$ := `performance_incentive` (\$/kWh): incentive revenue per kWh discharged
+- $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate
 - $E_{\max} :=$ `max_capacity` $\times$ (`max_soc_fraction` $-$ `min_soc_fraction`): usable energy capacity (kWh)
 - $\eta_c$ := `charge_efficiency`, $\quad \eta_d$ := `discharge_efficiency`
 - $\overline{\text{SoC}}$ := `max_soc_fraction`, $\quad \underline{\text{SoC}}$ := `min_soc_fraction`
-- `n_control_window` := Horizon length for optimization
-- $\mathcal{T} := \{0, 1, \ldots, T\}$: hourly time steps over `n_control_window`
-- $\mathcal{M}_m$ := set of hours in month $m$, for $m = 1, \ldots, 12$
+- `n_control_window` := rolling horizon length in hours; converted to $T = \lceil \text{n\_control\_window} / \Delta t \rceil$ timesteps
+- $\mathcal{T} := \{0, 1, \ldots, T-1\}$: timesteps in the current rolling window
+- $\mathcal{M}_m$ := set of timesteps in month $m$, for $m = 1, \ldots, 12$
+- $N_{\max}$ := `n_max_events`: maximum number of discharge events per calendar month
+- $\tau$ := `steps_per_event` : number of timesteps per event (1 when `event_duration` is `null`)
+- $B_m$ := remaining event budget for month $m$ = $N_{\max}$ minus events already dispatched in prior windows
+
+## Dispatch Window Construction
+
+Before the MILP is solved, the dispatch window $\mathcal{D}$ is built in two steps:
+
+**Step 1 : Peak selection:** Within $\mathcal{W}$, timesteps at or above the `signal_threshold_percentile` of $\lambda_t$ are marked eligible: $\mathcal{E} = \{t \in \mathcal{W} : \lambda_t \geq \lambda_*\}$. If `min_peak_separation` is set, only the first peak is chosen.
+
+**Step 2 : Event window expansion:** If `event_duration` is specified, each peak in $\mathcal{E}$ is expanded by $\pm\,\tfrac{\text{event\_duration}}{2}$ timesteps to form $\mathcal{D}$. If `event_duration` is `null`, $\mathcal{D} = \mathcal{E}$.
 
 ## Decision Variables
 
-- $u_t \in \{0, 1\}$ := discharge binary: 1 if battery dispatches at hour $t$, 0 otherwise
-- $v_t \in \{0, 1\}$ := charge binary: 1 if battery charges at hour $t$, 0 otherwise
+- $u_t \in \{0, 1\}$ := discharge binary: 1 if the battery discharges at timestep $t$, 0 otherwise
+- $v_t \in \{0, 1\}$ := charge binary: 1 if the battery charges at timestep $t$, 0 otherwise
 
 ## Optimization Problem
 
-This optimization is executed for each window, during which the performance model is invoked and the initial conditions are set.
+This optimization is executed for each rolling window. At each window boundary the terminal SoC is carried forward as the initial condition for the next window.
 
 ### Objective
 
-Maximize total annual incentive revenue:
+Maximize total incentive revenue over the window:
 
 $$
-\max_{u_t,\, v_t} \quad \gamma \cdot \bar{P} \sum_{t \in \mathcal{T}} u_t
+\max_{u_t,\, v_t} \quad \gamma \cdot \bar{P} \cdot \Delta t \sum_{t \in \mathcal{T}} u_t
 $$
+
+The factor $\Delta t$ converts power (kW) to energy (kWh), so the objective is correctly scaled at any timestep resolution.
 
 ### Constraints
 
-- Dispatch only within peak window:
+- Dispatch only within the event window $\mathcal{D}$:
 
 $$
-u_t = 0 \qquad \forall\, t \notin \mathcal{W}
+u_t = 0 \qquad \forall\, t \notin \mathcal{D}
 $$
 
-- Dispatch only on high supervisory signal:
+- Maximum $N_{\max}$ discharge events per month. Because `event_duration` fixes each event to exactly $\tau$ timesteps, the event cap translates directly into a timestep cap:
 
 $$
-u_t = 1 \implies \lambda_t \geq \lambda^*_m \qquad \forall\, t \in \mathcal{M}_m
+\sum_{t \in \mathcal{M}_m \cap \mathcal{T}} u_t \leq B_m \cdot \tau \qquad \forall\, m
 $$
 
-where $\lambda^*_m$ is the threshold selecting the high LMP/peak load hours within month $m$.
-
-- Maximum $N_{max}$ events per month:
-
-$$
-\sum_{t \in \mathcal{M}_m} u_t \leq N_{\max} \qquad \forall\, m, \quad N_{\max}.
-$$
+After each window is solved, events are counted via rising-edge detection (a new event begins whenever $u_t = 1$ and $u_{t-1} = 0$) and $B_m$ is decremented accordingly for subsequent windows.
 
 - SoC evolution with charge and discharge:
 
 $$
-\text{SoC}_{t+1} = \text{SoC}_t + \frac{\eta_c \cdot v_t \cdot \bar{P}}{E_{\max}} - \frac{u_t \cdot \bar{P}}{\eta_d \cdot E_{\max}} \qquad \forall\, t \in \mathcal{T}
+\text{SoC}_{t+1} = \text{SoC}_t + \frac{\eta_c \cdot v_t \cdot \bar{P} \cdot \Delta t}{E_{\max}} - \frac{u_t \cdot \bar{P} \cdot \Delta t}{\eta_d \cdot E_{\max}} \qquad \forall\, t \in \mathcal{T}
 $$
 
 - SoC bounds:
@@ -134,17 +147,19 @@ $$
 u_t + v_t \leq 1 \qquad \forall\, t \in \mathcal{T}
 $$
 
-- No charging during dispatch window (battery reserved for discharge):
+- No charging during the dispatch window (battery reserved for discharge):
 
 $$
-v_t = 0 \qquad \forall\, t \in \mathcal{W}
+v_t = 0 \qquad \forall\, t \in \mathcal{D}
 $$
 
 - Binary variables:
 
 $$
-u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad \text{SoC}_t \in [0, 1] \qquad \forall\, t, m
+u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad \text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}] \qquad \forall\, t
 $$
-Example 34 performs the optimization with a synthetic LMP signal. The look-ahead horizon is set to 10 hours. As this value increases, the computational complexity grows and the solver may take significantly longer to run or fail to converge. Care should be taken when choosing this parameter: a short horizon limits visibility, making it difficult for the optimizer to identify the best dispatch opportunities across the full month. See figure below for the results. 
+
+
+Example 34 performs the optimization with a real LMP signal. The look-ahead horizon (`n_control_window`) controls how many hours are optimized at once. Larger values improve solution quality but increase solve time. See the figure below for results.
 
 ![](./figures/plm_optimized_dispatch.png)

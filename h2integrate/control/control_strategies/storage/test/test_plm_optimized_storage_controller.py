@@ -24,6 +24,21 @@ def _make_controller_with_config(config, n_timesteps=24, dt_seconds=3600):
     controller.time_index = pd.date_range("2024-01-01", periods=n_timesteps, freq="h")
     controller.in_peak_window = controller._compute_peak_window_mask()
     controller.month_ids = controller._compute_month_ids()
+    if config.event_duration is not None:
+        controller.steps_per_event = max(
+            1,
+            int(
+                round(
+                    pd.Timedelta(
+                        value=config.event_duration["val"],
+                        unit=config.event_duration["units"],
+                    ).total_seconds()
+                    / dt_seconds
+                )
+            ),
+        )
+    else:
+        controller.steps_per_event = 1
     return controller
 
 
@@ -43,7 +58,7 @@ def base_config():
         max_charge_rate=1.0,
         supervisory_signal=list(range(n)),
         peak_window={"start": "08:00:00", "end": "18:00:00"},
-        performance_incentive={"units": "$/kWh", "val": 10.0},
+        performance_incentive=10.0,
         n_max_events=24,
         signal_threshold_percentile=0.0,
     )
@@ -238,18 +253,18 @@ def test_optimizer_dispatch_respects_soc_constraints(base_config):
 
 @pytest.mark.unit
 def test_compute_eligible_mask_min_peak_separation_drops_nearby_peak():
-    """A lower peak within min_peak_separation of a higher peak is dropped."""
+    """A later peak within min_peak_separation of an earlier peak is dropped."""
     controller = _make_controller()
     controller.config = SimpleNamespace(
         signal_threshold_percentile=0.0,
         min_peak_separation={"units": "h", "val": 3},
     )
     controller.dt_seconds = 3600
-    # t=5 (signal=10) and t=7 (signal=8) are 2h apart — below the 3h threshold
+    # t=5 and t=7 are 2h apart — below the 3h threshold; first one (t=5) is kept
     signal = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 1.0, 8.0, 1.0, 1.0])
     mask = controller._compute_eligible_mask(signal)
-    assert mask[5], "higher peak should be kept"
-    assert not mask[7], "lower peak within separation should be dropped"
+    assert mask[5], "first peak should be kept"
+    assert not mask[7], "later peak within separation should be dropped"
 
 
 @pytest.mark.unit
