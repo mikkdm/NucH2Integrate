@@ -1,3 +1,4 @@
+import re
 import importlib.util
 from enum import IntEnum
 
@@ -84,6 +85,14 @@ class H2IntegrateModel:
         # create driver model
         # might be an analysis or optimization
         self.create_driver_model()
+
+        # create technology connection graph
+        G = self._create_technology_graph()
+        # Define the commodities produced by each technology from tech_connections
+        # Each element of the set is a tuple of (source_tech, commodity_produced)
+        self.techs_to_commodities = {
+            (e[0], e[-1]) for e in G.edges(data="commodity") if e[-1] is not None
+        }
 
         self.state = State.INITIALIZED
 
@@ -1399,6 +1408,7 @@ class H2IntegrateModel:
 
         for tech, tech_info in self.technology_config["technologies"].items():
             check_inputs(self.prob, tech, tech_info, self.tech_config_path)
+        self._check_tech_connections(self.prob)
 
     def run(self):
         # do model setup based on the driver config
@@ -1637,3 +1647,145 @@ class H2IntegrateModel:
                 "Generating an XDSM diagram requires technology interconnections, "
                 "but none were found."
             )
+
+    def _get_tech_performance_io_metadata(self, prob, tech_name):
+        tech_info = self.technology_config["technologies"].get(tech_name, {})
+
+        if bool(tech_info) and "performance_model" in tech_info:
+            if tech_info["performance_model"]["model"] == "FeedstockPerformanceModel":
+                group = getattr(prob.model.plant, f"{tech_name}_source")
+                inputs_outputs = list(group.get_io_metadata().keys())
+                return inputs_outputs
+
+            group = getattr(prob.model.plant, tech_name)
+            if (perf_sys := getattr(group, tech_info["performance_model"]["model"])) is not None:
+                inputs_outputs = list(perf_sys.get_io_metadata().keys())
+                return inputs_outputs
+
+            return []
+
+        msg = (
+            f"{tech_name} does not have a defined performance model "
+            f"in the technology configuration file {self.tech_config_path}."
+        )
+        raise KeyError(msg)
+
+    def _get_tech_group_io_metadata(self, prob, tech_name):
+        tech_info = self.technology_config["technologies"].get(tech_name, {})
+        model_types = ["performance_model", "finance_model", "cost_model", "control_strategy"]
+
+        tech_group_io = set()
+        for model_type in model_types:
+            if bool(tech_info) and model_type in tech_info:
+                if tech_info[model_type]["model"] == "FeedstockPerformanceModel":
+                    group = getattr(prob.model.plant, f"{tech_name}_source")
+                    inputs_outputs = list(group.get_io_metadata().keys())
+                    tech_group_io.update(inputs_outputs)
+
+                elif tech_info[model_type]["model"] == "FeedstockCostModel":
+                    group = getattr(prob.model.plant, tech_name)
+                    inputs_outputs = list(group.get_io_metadata().keys())
+                    tech_group_io.update(inputs_outputs)
+
+                else:
+                    group = getattr(prob.model.plant, tech_name)
+                    if (perf_sys := getattr(group, tech_info[model_type]["model"])) is not None:
+                        inputs_outputs = list(perf_sys.get_io_metadata().keys())
+                        tech_group_io.update(inputs_outputs)
+
+        return list(tech_group_io)
+
+    def _create_technology_graph(self):
+        # Classify technologies based on their output commodity (or commodities)
+        G = nx.DiGraph()
+        for connection in self.plant_config["technology_interconnections"]:
+            source = connection[0]
+            destination = connection[1]
+            if len(connection) == 4:
+                G.add_edge(source, destination, commodity=connection[2])
+            else:
+                G.add_edge(source, destination)
+        return G
+
+    def _check_tech_connections(self, prob):
+        G = self._create_technology_graph()
+        # Check 4-length connections where commodities are defined
+
+        tech_to_io_data = {
+            tech: self._get_tech_group_io_metadata(prob, tech) for tech in list(G.nodes())
+        }
+        for edge in G.edges(data="commodity"):
+            source_tech, dest_tech, commodity = edge
+
+            if commodity is not None:
+                # Check that the source tech outputs that commodity
+                # io_source = self._get_tech_performance_io_metadata(prob, source_tech)
+                # io_source = self._get_tech_group_io_metadata(prob, source_tech)
+                if f"{commodity}_out" not in tech_to_io_data[source_tech]:
+                    msg = f"Technology {source_tech} does not output {commodity}."
+                    # Check for outputs that follow splitter output naming convention
+                    if not any(
+                        re.fullmatch(rf"{commodity}_out\d", io_param)
+                        for io_param in tech_to_io_data[source_tech]
+                    ):
+                        raise ValueError(msg)
+                # Check that the destination tech has an input for the commodity
+                # io_dest = self._get_tech_performance_io_metadata(prob, dest_tech)
+                # io_dest = self._get_tech_group_io_metadata(prob, dest_tech)
+                if f"{commodity}_in" not in tech_to_io_data[dest_tech]:
+                    # Check for inputs that follow combiner input naming convention
+                    if not any(
+                        re.fullmatch(rf"{commodity}_in\d", io_param)
+                        for io_param in tech_to_io_data[dest_tech]
+                    ):
+                        msg = f"Technology {dest_tech} does not take {commodity} as an input."
+                        raise ValueError(msg)
+
+        if any(
+            len(connection) == 3 for connection in self.plant_config["technology_interconnections"]
+        ):
+            connections_to_check = [
+                c for c in self.plant_config["technology_interconnections"] if len(c) == 3
+            ]
+            for connection in connections_to_check:
+                msg = ""
+                source_tech, dest_tech, connected_parameter = connection
+                # NOTE: this has to be updated to include the cost and finance model inputs/outputs
+                if isinstance(connected_parameter, tuple | list):
+                    source_parameter, dest_parameter = connected_parameter
+                    if source_parameter not in tech_to_io_data[source_tech]:
+                        msg = (
+                            f"Technology `{source_tech}` is does not "
+                            f"have an output `{source_parameter}`"
+                        )
+                    if dest_parameter not in tech_to_io_data[dest_tech]:
+                        msg = (
+                            f"Technology `{dest_tech}` is does not "
+                            f"have an input `{dest_parameter}`"
+                        )
+                else:
+                    if connected_parameter not in tech_to_io_data[source_tech]:
+                        msg = (
+                            f"Technology `{source_tech}` is does not "
+                            f"have an output `{connected_parameter}`"
+                        )
+                    if connected_parameter not in tech_to_io_data[dest_tech]:
+                        msg = (
+                            f"Technology `{dest_tech}` is does not "
+                            f"have an input `{connected_parameter}`"
+                        )
+                if "Technology" in msg and "finance_subgroup" not in msg:
+                    raise ValueError(msg)
+
+    def _get_commodity_for_tech(self, tech_name):
+        """Get a list of the commodities produced for a technology.
+
+        Args:
+            tech_name (str): name of technology
+
+        Returns:
+            list[str]: list of commodities produced by the tech_name
+        """
+        tech_commodities = [e[1] for e in self.techs_to_commodities if e[0] == tech_name]
+
+        return tech_commodities
