@@ -121,4 +121,6 @@ ax.set_ylim([0, 105])
 
 
 plt.tight_layout()
-plt.savefig("plm_optimized_dispatch.png", dpi=150, bbox_inches="tight")
+plt.savefig(
+    "examples/34_plm_optimized_dispatch/plm_optimized_dispatch.png", dpi=150, bbox_inches="tight"
+)

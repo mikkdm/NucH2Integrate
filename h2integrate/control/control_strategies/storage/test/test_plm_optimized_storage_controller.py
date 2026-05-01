@@ -101,14 +101,13 @@ def test_compute_peak_window_mask():
     controller.config = SimpleNamespace(peak_window={"start": "00:00:00", "end": "02:00:00"})
     controller.time_index = pd.date_range("2024-01-01", periods=24, freq="h")
     mask = controller._compute_peak_window_mask()
-    expected = np.array([i <= 2 for i in range(24)])
+    expected = np.array([i < 2 for i in range(24)])
     assert isinstance(mask, np.ndarray)
     assert np.array_equal(mask, expected)
 
 
 @pytest.mark.unit
 def test_compute_month_ids():
-    # Jan 2024: 744h, Feb 2024 (leap year): 696h, Mar 2024: 744h
     controller = _make_controller()
     controller.time_index = pd.date_range("2024-01-01", periods=744 + 696 + 744, freq="h")
     month_ids = controller._compute_month_ids()
@@ -242,13 +241,18 @@ def test_optimizer_dispatch_respects_soc_constraints(base_config):
 
     PeakLoadManagementOptimizedStorageController.glpk_solve_call(model)
 
-    soc = base_config.init_soc_fraction * base_config.max_capacity
+    E_max = base_config.max_capacity * (base_config.max_soc_fraction - base_config.min_soc_fraction)
+    eta_c = base_config.charge_efficiency
+    eta_d = base_config.discharge_efficiency
+    dt_hours = 3600 / 3600.0
+    soc = base_config.init_soc_fraction
     for t in range(24):
-        charge = pyomo.value(model.charge[t])  # type: ignore[index]
-        discharge = pyomo.value(model.discharge[t])  # type: ignore[index]
-        soc += charge - discharge
-        assert soc >= base_config.min_soc_fraction * base_config.max_capacity
-        assert soc <= base_config.max_soc_fraction * base_config.max_capacity
+        p_charge = pyomo.value(model.p_charge[t])  # type: ignore[index]
+        p_discharge = pyomo.value(model.p_discharge[t])  # type: ignore[index]
+        if t > 0:
+            soc += eta_c * p_charge * dt_hours / E_max - p_discharge * dt_hours / (eta_d * E_max)
+        assert soc >= base_config.min_soc_fraction - 1e-6
+        assert soc <= base_config.max_soc_fraction + 1e-6
 
 
 @pytest.mark.unit
@@ -315,3 +319,29 @@ def test_optimizer_dispatch_respects_charge_discharge_exclusivity(base_config):
         charge = pyomo.value(model.charge[t])  # type: ignore[index]
         discharge = pyomo.value(model.discharge[t])  # type: ignore[index]
         assert not (charge > 0.5 and discharge > 0.5)
+
+
+@pytest.mark.regression
+def test_mccormick_power_zero_when_binary_zero(base_config):
+    """McCormick constraint: p_discharge[t] must be 0 whenever discharge[t] == 0."""
+    controller = _make_controller_with_config(base_config)
+    model = controller._build_dr_model(
+        window_start=0,
+        window_len=24,
+        init_soc=base_config.init_soc_fraction,
+        remaining_budget={1: base_config.n_max_events},
+        P_max=base_config.max_charge_rate,
+        storage_capacity=base_config.max_capacity,
+    )
+
+    PeakLoadManagementOptimizedStorageController.glpk_solve_call(model)
+
+    for t in range(24):
+        u = pyomo.value(model.discharge[t])  # type: ignore[index]
+        p_d = pyomo.value(model.p_discharge[t])  # type: ignore[index]
+        v = pyomo.value(model.charge[t])  # type: ignore[index]
+        p_c = pyomo.value(model.p_charge[t])  # type: ignore[index]
+        if u < 0.5:
+            assert p_d < 1e-6, f"p_discharge[{t}]={p_d} but discharge[{t}]={u}"
+        if v < 0.5:
+            assert p_c < 1e-6, f"p_charge[{t}]={p_c} but charge[{t}]={v}"

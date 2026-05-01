@@ -107,11 +107,10 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
     """Demand-response storage controller using a rolling-horizon MILP.
 
     Each call to the dispatch solver iterates over the full simulation in
-    windows of length ``n_control_window_hours``. For each window it receives
-    the monthly LMP forecast, solves the MILP to maximize incentive
-    revenue, then passes the resulting dispatch commands to the
-    performance model. The terminal SOC of each window is carried forward
-    as the initial SOC of the next window.
+    windows of length ``n_control_window_hours``. For each window it builds
+    and solves a MILP that maximises incentive revenue, then passes the
+    resulting dispatch commands to the performance model. The terminal SOC
+    of each window is carried forward as the initial SOC of the next window.
     """
 
     dr_model: Any
@@ -300,7 +299,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
                 # Run the performance model for this window.
                 storage_out_window, soc_window = performance_model(
-                    self._get_storage_dispatch_commands(P_max),
+                    self._get_storage_dispatch_commands(),
                     **performance_model_kwargs,
                     sim_start_index=window_start,
                 )
@@ -361,7 +360,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         times = pd.DatetimeIndex(self.time_index).time
         if end < start:
             raise ValueError("peak_window end time must be after start time.")
-        return np.array([start <= t <= end for t in times])
+        return np.array([start <= t < end for t in times])
 
     def _compute_month_ids(self) -> np.ndarray:
         """Return the calendar month index (1-12) for each timestep.
@@ -478,10 +477,25 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
     ) -> pyomo.ConcreteModel:
         """Build the DR MILP for a single rolling window.
 
+        Decision variables
+        ------------------
+        discharge[t] : binary
+            Event indicator — 1 if a discharge event is active at timestep t.
+            Used for event counting and window feasibility constraints only.
+        charge[t] : binary
+            Event indicator — 1 if a charge event is active at timestep t.
+        p_discharge[t] : continuous in [0, P_max]
+            Actual discharge power (kW). Linked to the binary via the
+            McCormick upper-bound constraint ``p_discharge[t] <= P_max * discharge[t]``.
+        p_charge[t] : continuous in [0, P_max]
+            Actual charge power (kW). Linked via ``p_charge[t] <= P_max * charge[t]``.
+        soc[t] : continuous in [soc_min, soc_max]
+            State of charge (fraction).
+
         Args:
-            window_start (int): Timestep index of the first hour
+            window_start (int): Timestep index of the first timestep
                 in this window.
-            window_len (int): Number of timesteps in this window
+            window_len (int): Number of timesteps in this window.
             init_soc (float): State-of-charge fraction at the start of
                 this window.
             remaining_budget (dict): Mapping of ``month_id (int)`` to
@@ -525,12 +539,25 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         m.T = pyomo.Set(initialize=range(window_len), doc="Timesteps in window")
         m.M = pyomo.Set(initialize=months_in_window, doc="Months in window")
 
-        # Things to solve for
+        # Binary event indicators — used for event counting and window constraints.
         m.discharge = pyomo.Var(
-            m.T, domain=pyomo.Binary, doc="Discharge binary: 1 = discharging at timestep t"
+            m.T, domain=pyomo.Binary, doc="1 if a discharge event is active at timestep t"
         )
         m.charge = pyomo.Var(
-            m.T, domain=pyomo.Binary, doc="Charge binary: 1 = charging at timestep t"
+            m.T, domain=pyomo.Binary, doc="1 if a charge event is active at timestep t"
+        )
+        # Actual kW dispatched each timestep.
+        m.p_discharge = pyomo.Var(
+            m.T,
+            domain=pyomo.NonNegativeReals,
+            bounds=(0, P_max),
+            doc="Discharge power (kW) at timestep t",
+        )
+        m.p_charge = pyomo.Var(
+            m.T,
+            domain=pyomo.NonNegativeReals,
+            bounds=(0, P_max),
+            doc="Charge power (kW) at timestep t",
         )
         m.soc = pyomo.Var(
             m.T,
@@ -539,11 +566,10 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             doc="State of charge SoC_t",
         )
 
-        # Incentive revenue is earned for every kWh discharged during the dispatch window,
-        # so we need the energy at every timestep to be in Kwh
+        # Incentive revenue is earned for every kWh discharged.
         dt_hours = self.dt_seconds / 3600.0
         m.objective = pyomo.Objective(
-            expr=-incentive * P_max * dt_hours * sum(m.discharge[t] for t in m.T),
+            expr=-incentive * dt_hours * sum(m.p_discharge[t] for t in m.T),
             sense=pyomo.minimize,
         )
 
@@ -562,7 +588,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             rule=lambda mdl, t: mdl.discharge[t] <= int(eligible_t_w[t]),
         )
 
-        # There is limit on the number of events, not discharge timesteps.
+        # There is a limit on the number of events, not discharge timesteps.
         # However, we know the number of timesteps in the event from steps_per_event,
         # so we can indirectly limit the number of discharge timesteps in each month
         # by multiplying the event cap by steps_per_event.
@@ -577,6 +603,16 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
         m.max_events = pyomo.Constraint(m.M, rule=max_events_rule)
 
+        # Power is zero when the binary is 0, and at most P_max when 1.
+        m.discharge_power_link = pyomo.Constraint(
+            m.T,
+            rule=lambda mdl, t: mdl.p_discharge[t] <= P_max * mdl.discharge[t],
+        )
+        m.charge_power_link = pyomo.Constraint(
+            m.T,
+            rule=lambda mdl, t: mdl.p_charge[t] <= P_max * mdl.charge[t],
+        )
+
         m.soc_init = pyomo.Constraint(expr=m.soc[0] == init_soc)
 
         # Dynamics of the battery SOC evolution.
@@ -585,8 +621,8 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 return pyomo.Constraint.Skip
             return mdl.soc[t] == (
                 mdl.soc[t - 1]
-                + eta_c * mdl.charge[t] * P_max * dt_hours / E_max
-                - mdl.discharge[t] * P_max * dt_hours / (eta_d * E_max)
+                + eta_c * mdl.p_charge[t] * dt_hours / E_max
+                - mdl.p_discharge[t] * dt_hours / (eta_d * E_max)
             )
 
         m.soc_evolution = pyomo.Constraint(m.T, rule=soc_evolution_rule)
@@ -597,7 +633,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             rule=lambda mdl, t: mdl.discharge[t] + mdl.charge[t] <= 1,
         )
 
-        # Can't charge in the dispatch window
+        # Can't charge in the dispatch window.
         m.no_charge_in_window = pyomo.Constraint(
             m.T,
             rule=lambda mdl, t: (
@@ -670,17 +706,14 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             results = solver.solve(pyomo_model, options=solver_options.constructed, tee=False)
         return results
 
-    def _get_storage_dispatch_commands(self, P_max: float) -> list:
+    def _get_storage_dispatch_commands(self) -> list:
         """Net dispatch commands for the solved window.
 
-        Args:
-            P_max (float): Maximum charge/discharge rate (kW).
-
         Returns:
-            list[float]: ``(u_t - v_t) * P_max`` for each timestep in
-            the solved window. Positive = discharge, negative = charge.
+            list[float]: ``p_discharge_t - p_charge_t`` (kW) for each timestep
+            in the solved window. Positive = discharge, negative = charge.
         """
         return [
-            (pyomo.value(self.dr_model.discharge[t]) - pyomo.value(self.dr_model.charge[t])) * P_max
+            pyomo.value(self.dr_model.p_discharge[t]) - pyomo.value(self.dr_model.p_charge[t])  # type: ignore[index]
             for t in self.dr_model.T
         ]

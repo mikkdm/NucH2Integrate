@@ -73,13 +73,13 @@ The controller works at any simulation timestep resolution (`dt`). All time-base
 - $\mathcal{W}$ := `peak_window`: set of timesteps eligible for dispatch (e.g., 12:00--20:00 each day)
 - $\lambda_*$ := signal threshold = `signal_threshold_percentile`-th percentile of $\lambda_t$ over $\mathcal{W}$
 - $\mathcal{E}$ := eligible peak timesteps: $\{t \in \mathcal{W} : \lambda_t \geq \lambda_*\}$, respecting `min_peak_separation`
-- $\mathcal{D}$ := dispatch window: union of $\pm\,\tfrac{\text{event\_duration}}{2}$ neighbourhoods around each peak in $\mathcal{E}$ (equals $\mathcal{E}$ when `event_duration` is `null`)
+- $\mathcal{D}$ := dispatch window:  $\pm\,\tfrac{\text{event\_duration}}{2}$  around each peak in $\mathcal{E}$
 - $\gamma$ := `performance_incentive` (\$/kWh): incentive revenue per kWh discharged
 - $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate
 - $E_{\max} :=$ `max_capacity` $\times$ (`max_soc_fraction` $-$ `min_soc_fraction`): usable energy capacity (kWh)
 - $\eta_c$ := `charge_efficiency`, $\quad \eta_d$ := `discharge_efficiency`
 - $\overline{\text{SoC}}$ := `max_soc_fraction`, $\quad \underline{\text{SoC}}$ := `min_soc_fraction`
-- `n_control_window` := rolling horizon length in hours; converted to $T = \lceil \text{n\_control\_window} / \Delta t \rceil$ timesteps
+- `n_control_window_hours` := rolling horizon length in hours; converted to $T = \lceil \text{n\_control\_window\_hours} / \Delta t \rceil$ timesteps
 - $\mathcal{T} := \{0, 1, \ldots, T-1\}$: timesteps in the current rolling window
 - $\mathcal{M}_m$ := set of timesteps in month $m$, for $m = 1, \ldots, 12$
 - $N_{\max}$ := `n_max_events`: maximum number of discharge events per calendar month
@@ -96,8 +96,12 @@ Before the MILP is solved, the dispatch window $\mathcal{D}$ is built in two ste
 
 ## Decision Variables
 
-- $u_t \in \{0, 1\}$ := discharge binary: 1 if the battery discharges at timestep $t$, 0 otherwise
-- $v_t \in \{0, 1\}$ := charge binary: 1 if the battery charges at timestep $t$, 0 otherwise
+
+- $u_t \in \{0, 1\}$ := discharge binary: 1 if a discharge event is active at timestep $t$; used for event counting and window feasibility constraints only
+- $v_t \in \{0, 1\}$ := charge binary: 1 if a charge event is active at timestep $t$
+- $p_{d,t} \in [0,\, \bar{P}]$ := discharge power (kW) actually dispatched at timestep $t$
+- $p_{c,t} \in [0,\, \bar{P}]$ := charge power (kW) actually consumed at timestep $t$
+- $\text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}]$ := state of charge (fraction) at timestep $t$
 
 ## Optimization Problem
 
@@ -108,7 +112,7 @@ This optimization is executed for each rolling window. At each window boundary t
 Maximize total incentive revenue over the window:
 
 $$
-\max_{u_t,\, v_t} \quad \gamma \cdot \bar{P} \cdot \Delta t \sum_{t \in \mathcal{T}} u_t
+\max_{u_t,\, v_t,\, p_{d,t},\, p_{c,t}} \quad \gamma \cdot \Delta t \sum_{t \in \mathcal{T}} p_{d,t}
 $$
 
 The factor $\Delta t$ converts power (kW) to energy (kWh), so the objective is correctly scaled at any timestep resolution.
@@ -129,10 +133,20 @@ $$
 
 After each window is solved, events are counted via rising-edge detection (a new event begins whenever $u_t = 1$ and $u_{t-1} = 0$) and $B_m$ is decremented accordingly for subsequent windows.
 
-- SoC evolution with charge and discharge:
+- Power is zero when the binary is 0, and at most $\bar{P}$ when it is 1:
 
 $$
-\text{SoC}_{t+1} = \text{SoC}_t + \frac{\eta_c \cdot v_t \cdot \bar{P} \cdot \Delta t}{E_{\max}} - \frac{u_t \cdot \bar{P} \cdot \Delta t}{\eta_d \cdot E_{\max}} \qquad \forall\, t \in \mathcal{T}
+p_{d,t} \leq \bar{P} \cdot u_t \qquad \forall\, t \in \mathcal{T}
+$$
+
+$$
+p_{c,t} \leq \bar{P} \cdot v_t \qquad \forall\, t \in \mathcal{T}
+$$
+
+- SoC evolution with continuous charge and discharge power:
+
+$$
+\text{SoC}_{t} = \text{SoC}_{t-1} + \frac{\eta_c \cdot p_{c,t} \cdot \Delta t}{E_{\max}} - \frac{p_{d,t} \cdot \Delta t}{\eta_d \cdot E_{\max}} \qquad \forall\, t \in \mathcal{T},\, t > 0
 $$
 
 - SoC bounds:
@@ -153,13 +167,13 @@ $$
 v_t = 0 \qquad \forall\, t \in \mathcal{D}
 $$
 
-- Binary variables:
+- Variable domains:
 
 $$
-u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad \text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}] \qquad \forall\, t
+u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, \bar{P}], \quad \text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}] \qquad \forall\, t
 $$
 
 
-Example 34 performs the optimization with a real LMP signal. The look-ahead horizon (`n_control_window`) controls how many hours are optimized at once. Larger values improve solution quality but increase solve time. See the figure below for results.
+Example 34 performs the optimization with a real LMP signal. The look-ahead horizon (`n_control_window_hours`) controls how many hours are optimized at once. Larger values improve solution quality but increase solve time. See the figure below for results.
 
 ![](./figures/plm_optimized_dispatch.png)
