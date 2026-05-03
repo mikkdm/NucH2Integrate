@@ -539,6 +539,10 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         soc_max = self.config.max_soc_fraction
         soc_min = self.config.min_soc_fraction
         dt_hours = self.dt_seconds / 3600.0
+
+        # This  converts the incentive from $/event to an effective $/kWh
+        # rate based on the number of timesteps in an event (steps_per_event),
+        #  the length of each timestep in hours (dt_hours), and the max power (P_max).
         if self.config.performance_incentive_per_event is not None:
             incentive = self.config.performance_incentive_per_event / (
                 self.steps_per_event * dt_hours * P_max
