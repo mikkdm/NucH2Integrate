@@ -35,6 +35,12 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
         peak_window (dict): Hours eligible for dispatch. Keys ``'start'``
             and ``'end'`` must be strings in ``HH:MM:SS`` format.
         performance_incentive (float): Incentive revenue in $/kWh.
+            Mutually exclusive with ``performance_incentive_per_event``.
+        performance_incentive_per_event (float): Incentive revenue in
+            $/event. Converted internally to an effective $/kWh rate using
+            ``steps_per_event``, ``dt``, and ``P_max``:
+            ``incentive_kWh = incentive_event / (steps_per_event * dt_h * P_max)``.
+            Mutually exclusive with ``performance_incentive``.
         charge_efficiency (float): Charge efficiency in [0, 1].
             Defaults to 1.0.
         discharge_efficiency (float): Discharge efficiency in [0, 1].
@@ -70,7 +76,8 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
     max_charge_rate: float = field()
     supervisory_signal: list = field()
     peak_window: dict = field()
-    performance_incentive: float = field()
+    performance_incentive: float = field(default=None)
+    performance_incentive_per_event: float = field(default=None)
     charge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     discharge_efficiency: float = field(validator=range_val(0, 1), default=1.0)
     n_max_events: int = field(default=10)
@@ -83,6 +90,19 @@ class PeakLoadManagementOptimizedControllerConfig(PyomoStorageControllerBaseConf
         # Make sure n_control_window_hours is an int
         self.n_control_window_hours = int(round(self.n_control_window_hours))
         super().__attrs_post_init__()
+
+        both_set = (
+            self.performance_incentive is not None
+            and self.performance_incentive_per_event is not None
+        )
+        neither_set = (
+            self.performance_incentive is None and self.performance_incentive_per_event is None
+        )
+        if both_set or neither_set:
+            raise ValueError(
+                "Exactly one of 'performance_incentive' ($/kWh) or "
+                "'performance_incentive_per_event' ($/event) must be set."
+            )
 
         for field_name, value in (
             ("event_duration", self.event_duration),
@@ -108,7 +128,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
     Each call to the dispatch solver iterates over the full simulation in
     windows of length ``n_control_window_hours``. For each window it builds
-    and solves a MILP that maximises incentive revenue, then passes the
+    and solves a MILP that maximizes incentive revenue, then passes the
     resulting dispatch commands to the performance model. The terminal SOC
     of each window is carried forward as the initial SOC of the next window.
     """
@@ -518,7 +538,13 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         eta_d = self.config.discharge_efficiency
         soc_max = self.config.max_soc_fraction
         soc_min = self.config.min_soc_fraction
-        incentive = self.config.performance_incentive
+        dt_hours = self.dt_seconds / 3600.0
+        if self.config.performance_incentive_per_event is not None:
+            incentive = self.config.performance_incentive_per_event / (
+                self.steps_per_event * dt_hours * P_max
+            )
+        else:
+            incentive = self.config.performance_incentive
         N_max = self.config.n_max_events
 
         # Only the timesteps within the current window are relevant
@@ -539,7 +565,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         m.T = pyomo.Set(initialize=range(window_len), doc="Timesteps in window")
         m.M = pyomo.Set(initialize=months_in_window, doc="Months in window")
 
-        # Binary event indicators — used for event counting and window constraints.
+        # Binary event indicators- used for event counting and window constraints.
         m.discharge = pyomo.Var(
             m.T, domain=pyomo.Binary, doc="1 if a discharge event is active at timestep t"
         )
@@ -567,7 +593,6 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         )
 
         # Incentive revenue is earned for every kWh discharged.
-        dt_hours = self.dt_seconds / 3600.0
         m.objective = pyomo.Objective(
             expr=-incentive * dt_hours * sum(m.p_discharge[t] for t in m.T),
             sense=pyomo.minimize,

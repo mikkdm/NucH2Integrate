@@ -345,3 +345,57 @@ def test_mccormick_power_zero_when_binary_zero(base_config):
             assert p_d < 1e-6, f"p_discharge[{t}]={p_d} but discharge[{t}]={u}"
         if v < 0.5:
             assert p_c < 1e-6, f"p_charge[{t}]={p_c} but charge[{t}]={v}"
+
+
+@pytest.mark.regression
+def test_performance_incentive_per_event_matches_equivalent_kwh_rate():
+    """$/event and its equivalent $/kWh rate must produce identical dispatch.
+
+    With event_duration=2h, dt=1h, P_max=1.0 kW:
+      steps_per_event=2, dt_hours=1.0
+      10.0 $/event / (2 * 1.0 * 1.0) = 5.0 $/kWh
+    """
+    common = {
+        "max_capacity": 10.0,
+        "max_soc_fraction": 1.0,
+        "min_soc_fraction": 0.0,
+        "init_soc_fraction": 1.0,
+        "n_control_window_hours": 24,
+        "commodity": "electricity",
+        "commodity_rate_units": "kW",
+        "tech_name": "battery",
+        "system_commodity_interface_limit": 100.0,
+        "max_charge_rate": 1.0,
+        "supervisory_signal": list(range(24)),
+        "peak_window": {"start": "08:00:00", "end": "18:00:00"},
+        "n_max_events": 24,
+        "signal_threshold_percentile": 0.0,
+        "event_duration": {"val": 2, "units": "h"},
+    }
+    config_kwh = PeakLoadManagementOptimizedControllerConfig(**common, performance_incentive=5.0)
+    config_event = PeakLoadManagementOptimizedControllerConfig(
+        **common, performance_incentive_per_event=10.0
+    )
+
+    build_kwargs = {
+        "window_start": 0,
+        "window_len": 24,
+        "init_soc": 1.0,
+        "remaining_budget": {1: 24},
+        "P_max": 1.0,
+        "storage_capacity": 10.0,
+    }
+    model_kwh = _make_controller_with_config(config_kwh)._build_dr_model(**build_kwargs)
+    model_event = _make_controller_with_config(config_event)._build_dr_model(**build_kwargs)
+
+    PeakLoadManagementOptimizedStorageController.glpk_solve_call(model_kwh)
+    PeakLoadManagementOptimizedStorageController.glpk_solve_call(model_event)
+
+    for t in range(24):
+        assert (
+            abs(
+                pyomo.value(model_kwh.p_discharge[t])  # type: ignore[index]
+                - pyomo.value(model_event.p_discharge[t])  # type: ignore[index]
+            )
+            < 1e-4
+        ), f"dispatch mismatch at t={t}"
