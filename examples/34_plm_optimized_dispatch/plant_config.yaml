@@ -1,5 +1,5 @@
 name: plant_config
-description: Simulation for PLM MILP-optimized battery dispatch
+description: Simulation for Peak Load Management MILP-optimized battery dispatch
 plant:
   plant_life: 1
   simulation:

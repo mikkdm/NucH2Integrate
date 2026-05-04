@@ -1,5 +1,5 @@
 name: driver_config
-description: Driver configuration for PLM MILP-optimized battery dispatch example
+description: Driver configuration for Peak Load Management MILP-optimized battery dispatch example
 general:
   folder_output: outputs
   create_om_reports: false
