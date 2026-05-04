@@ -176,6 +176,6 @@ u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, \ba
 $$
 
 
-Example 34 performs the optimization with a real LMP signal. The look-ahead horizon (`n_control_window_hours`) controls how many hours are optimized at once. Larger values improve solution quality but increase solve time. See the figure below for results.
+Example 34 performs the optimization with a synthetic LMP signal. The look-ahead horizon (`n_control_window_hours`) controls how many hours are optimized at once. Larger values improve solution quality but increase solve time. See the figure below for results.
 
 ![](./figures/plm_optimized_dispatch.png)
