@@ -248,7 +248,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
             For each window it:
 
             1. Builds a fresh MILP from the window's signal slice.
-            2. Solves the MILP with GLPK.
+            2. Solves the MILP with a MILP solver
             3. Calls ``performance_model`` with the resulting dispatch
                commands.
             4. Carries the terminal SOC into the next window.
