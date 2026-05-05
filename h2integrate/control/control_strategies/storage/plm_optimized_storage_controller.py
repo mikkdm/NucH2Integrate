@@ -684,7 +684,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 Defaults to 0.
 
         Raises:
-            RuntimeError: If GLPK returns a not OK status or an
+            RuntimeError: If solver returns a not OK status or an
                 unacceptable termination condition.
         """
 
