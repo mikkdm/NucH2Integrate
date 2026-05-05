@@ -74,8 +74,7 @@ We initialize and setup the H2I model
 from pathlib import Path
 from matplotlib import pyplot as plt
 
-from h2integrate import H2IntegrateModel, EXAMPLE_DIR
-from h2integrate.core.inputs.validation import load_tech_yaml, load_plant_yaml, load_driver_yaml
+from h2integrate import H2IntegrateModel, EXAMPLE_DIR, load_tech_yaml, load_plant_yaml, load_driver_yaml
 
 ex_dir = EXAMPLE_DIR / "13_dispatch_for_electrolyzer"
 tech_config = load_tech_yaml(ex_dir / "tech_config.yaml")

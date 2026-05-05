@@ -37,8 +37,7 @@ import os
 
 import numpy as np
 
-from h2integrate import H2IntegrateModel, EXAMPLE_DIR, load_yaml, write_readable_yaml
-from h2integrate.core.inputs.validation import load_tech_yaml
+from h2integrate import H2IntegrateModel, EXAMPLE_DIR, load_yaml, write_readable_yaml, load_tech_yaml
 from h2integrate.preprocess.wind_turbine_file_tools import export_turbine_to_pysam_format
 ```
 
