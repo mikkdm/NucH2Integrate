@@ -1,3 +1,4 @@
+import math
 from typing import Any
 from datetime import datetime
 
@@ -194,14 +195,12 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
         if self.config.event_duration is not None:
             self.steps_per_event: int = max(
                 1,
-                int(
-                    round(
-                        pd.Timedelta(
-                            value=self.config.event_duration["val"],
-                            unit=self.config.event_duration["units"],
-                        ).total_seconds()
-                        / self.dt_seconds
-                    )
+                math.ceil(
+                    pd.Timedelta(
+                        value=self.config.event_duration["val"],
+                        unit=self.config.event_duration["units"],
+                    ).total_seconds()
+                    / self.dt_seconds
                 ),
             )
         else:

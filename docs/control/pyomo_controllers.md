@@ -76,8 +76,8 @@ The controller works at any simulation timestep resolution (`dt`). All time-base
 - $\mathcal{E}$ := eligible peak timesteps: $\{t \in \mathcal{W} : \lambda_t \geq \lambda_*\}$, respecting `min_peak_separation`
 - `event_duration` := total duration of one discharge event, expressed as a ``{units, val}`` dict (e.g. ``{units: h, val: 4}`` for a 4-hour event)
 - $\mathcal{D}$ := dispatch window: $\pm$`event_duration`/2 neighbourhoods around each peak in $\mathcal{E}$ (equals $\mathcal{E}$ when `event_duration` is `null`)
-- $\gamma$ := incentive revenue per kWh discharged (\$/kWh). Specified directly via `performance_incentive`, or derived from `performance_incentive_per_event` (\$/event) as $\gamma = \gamma_{\text{event}} / (\tau \cdot \Delta t \cdot \bar{P})$
-- $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate
+- $\gamma$ := incentive revenue per kWh discharged (\$/kWh). Specified directly via `performance_incentive`, or derived from `performance_incentive_per_event` (\$/event) as $\gamma = \gamma_{\text{event}} / (\tau \cdot \Delta t \cdot P_{\max})$
+- $P_{\max}$ := `max_charge_rate` (kW): maximum charge and discharge rate
 - $E_{\max} :=$ `max_capacity` $\times$ (`max_soc_fraction` $-$ `min_soc_fraction`): usable energy capacity (kWh)
 - $\eta_c$ := `charge_efficiency`, $\quad \eta_d$ := `discharge_efficiency`
 - $\text{SoC}_{\max}$ := `max_soc_fraction`, $\quad \text{SoC}_{\min}$ := `min_soc_fraction`
@@ -101,8 +101,8 @@ Before the MILP is solved, the dispatch window $\mathcal{D}$ is built in two ste
 
 - $u_t \in \{0, 1\}$ := discharge binary: 1 if a discharge event is active at timestep $t$; used for event counting and window feasibility constraints only
 - $v_t \in \{0, 1\}$ := charge binary: 1 if a charge event is active at timestep $t$
-- $p_{d,t} \in [0,\, \bar{P}]$ := discharge power (kW) actually dispatched at timestep $t$
-- $p_{c,t} \in [0,\, \bar{P}]$ := charge power (kW) actually consumed at timestep $t$
+- $p_{d,t} \in [0,\, P_{\max}]$ := discharge power (kW) actually dispatched at timestep $t$
+- $p_{c,t} \in [0,\, P_{\max}]$ := charge power (kW) actually consumed at timestep $t$
 - $\text{SoC}_t \in [\text{SoC}_{\min},\, \text{SoC}_{\max}]$ := state of charge (fraction) at timestep $t$
 
 ## Optimization Problem
@@ -114,7 +114,7 @@ This optimization is executed for each rolling window. At each window boundary t
 Maximize total incentive revenue over the window:
 
 $$
-\max_{u_t,\, v_t,\, p_{d,t},\, p_{c,t}} \quad \gamma \cdot \Delta t \sum_{t \in \mathcal{T}} p_{d,t}
+\max_{u_t, v_t,p_{d,t}, p_{c,t}} \quad \gamma \cdot \Delta t \sum_{t \in \mathcal{T}} p_{d,t}
 $$
 
 The factor $\Delta t$ converts power (kW) to energy (kWh), so the objective is correctly scaled at any timestep resolution.
@@ -135,14 +135,14 @@ $$
 
 After each window is solved, events are counted via rising-edge detection (a new event begins whenever $u_t = 1$ and $u_{t-1} = 0$) and $B_m$ is decremented accordingly for subsequent windows.
 
-- Power is zero when the binary is 0, and at most $\bar{P}$ when it is 1:
+- Power is zero when the binary is 0, and at most $P_{\max}$ when it is 1:
 
 $$
-p_{d,t} \leq \bar{P} \cdot u_t \qquad \forall\, t \in \mathcal{T}
+p_{d,t} \leq P_{\max} \cdot u_t \qquad \forall\, t \in \mathcal{T}
 $$
 
 $$
-p_{c,t} \leq \bar{P} \cdot v_t \qquad \forall\, t \in \mathcal{T}
+p_{c,t} \leq P_{\max} \cdot v_t \qquad \forall\, t \in \mathcal{T}
 $$
 
 - SoC evolution with continuous charge and discharge power:
@@ -172,7 +172,7 @@ $$
 - Variable domains:
 
 $$
-u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, \bar{P}], \quad \text{SoC}_t \in [\text{SoC}_{\min},\, \text{SoC}_{\max}] \qquad \forall\, t
+u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, P_{\max}], \quad \text{SoC}_t \in [\text{SoC}_{\min},\, \text{SoC}_{\max}] \qquad \forall\, t
 $$
 
 
