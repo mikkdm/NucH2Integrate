@@ -80,7 +80,7 @@ The controller works at any simulation timestep resolution (`dt`). All time-base
 - $\bar{P}$ := `max_charge_rate` (kW): maximum charge and discharge rate
 - $E_{\max} :=$ `max_capacity` $\times$ (`max_soc_fraction` $-$ `min_soc_fraction`): usable energy capacity (kWh)
 - $\eta_c$ := `charge_efficiency`, $\quad \eta_d$ := `discharge_efficiency`
-- $\overline{\text{SoC}}$ := `max_soc_fraction`, $\quad \underline{\text{SoC}}$ := `min_soc_fraction`
+- $\text{SoC}_{\max}$ := `max_soc_fraction`, $\quad \text{SoC}_{\min}$ := `min_soc_fraction`
 - `n_control_window_hours` := rolling horizon length in hours; converted to $T =$ `n_control_window_hours` / $\Delta t$ timesteps
 - $\mathcal{T} := \{0, 1, \ldots, T-1\}$: timesteps in the current rolling window
 - $\mathcal{M}_m$ := set of timesteps in month $m$, for $m = 1, \ldots, 12$
@@ -103,7 +103,7 @@ Before the MILP is solved, the dispatch window $\mathcal{D}$ is built in two ste
 - $v_t \in \{0, 1\}$ := charge binary: 1 if a charge event is active at timestep $t$
 - $p_{d,t} \in [0,\, \bar{P}]$ := discharge power (kW) actually dispatched at timestep $t$
 - $p_{c,t} \in [0,\, \bar{P}]$ := charge power (kW) actually consumed at timestep $t$
-- $\text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}]$ := state of charge (fraction) at timestep $t$
+- $\text{SoC}_t \in [\text{SoC}_{\min},\, \text{SoC}_{\max}]$ := state of charge (fraction) at timestep $t$
 
 ## Optimization Problem
 
@@ -154,7 +154,7 @@ $$
 - SoC bounds:
 
 $$
-\underline{\text{SoC}} \leq \text{SoC}_t \leq \overline{\text{SoC}} \qquad \forall\, t \in \mathcal{T}
+\text{SoC}_{\min} \leq \text{SoC}_t \leq \text{SoC}_{\max} \qquad \forall\, t \in \mathcal{T}
 $$
 
 - No simultaneous charge and discharge:
@@ -172,7 +172,7 @@ $$
 - Variable domains:
 
 $$
-u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, \bar{P}], \quad \text{SoC}_t \in [\underline{\text{SoC}},\, \overline{\text{SoC}}] \qquad \forall\, t
+u_t \in \{0, 1\}, \quad v_t \in \{0, 1\}, \quad p_{d,t},\, p_{c,t} \in [0,\, \bar{P}], \quad \text{SoC}_t \in [\text{SoC}_{\min},\, \text{SoC}_{\max}] \qquad \forall\, t
 $$
 
 

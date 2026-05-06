@@ -304,7 +304,7 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 # Solve the optimzation problem
                 self.solve_dispatch_model(
                     start_time=window_start,
-                    n_days=self.n_timesteps // 24,
+                    n_days=int(round(self.n_timesteps * self.dt_seconds / 86400)),
                 )
 
                 # Count new discharge events to track the monthly cap.
