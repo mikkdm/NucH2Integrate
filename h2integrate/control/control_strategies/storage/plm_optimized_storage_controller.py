@@ -136,7 +136,8 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
 
     dr_model: Any
     problem_state: DispatchProblemState
-    _time_step_bound = [300, 3600]
+    _time_step_bound = (300, 3600)
+
     def setup(self):
         """Initialize config, register OpenMDAO inputs, and pre-compute static masks.
 
@@ -326,7 +327,11 @@ class PeakLoadManagementOptimizedStorageController(PyomoStorageControllerBaseCla
                 )
 
                 # Performance model returns SOC in percent.
-                self.updated_initial_soc = soc_window[-1] / 100.0
+                self.updated_initial_soc = np.clip(
+                    soc_window[-1] / 100.0,
+                    self.config.min_soc_fraction,
+                    self.config.max_soc_fraction,
+                )
 
                 storage_out[window_start : window_start + window_len] = storage_out_window
                 soc_out[window_start : window_start + window_len] = soc_window
