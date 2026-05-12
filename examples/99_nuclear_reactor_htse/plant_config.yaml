@@ -12,13 +12,13 @@ plant:
 # interconnections; can support bidirectional connections
 # with the reverse definition.
 # this will naturally grow as we mature the interconnected tech
-technology_interconnections: 
-  - [nuclear, electrolyzer, electricity, cable],
-  - [nuclear, electrolyzer, heat, pipe], 
+technology_interconnections: [
+  ["nuclear", "htse", "electricity", "cable"],
+  ["nuclear", "htse", "heat", "pipe"]]
   # -["nuclear","network_heat","heat","pipe"]
 
-tech_to_dispatch_connections: 
-    - [electrolyzer, hydrogen, pipe]
+tech_to_dispatch_connections: [
+    ["htse", "h2_storage", "hydrogen", "pipe"]]
 
 resource_to_tech_connections: []
 

@@ -43,7 +43,7 @@ class SimpleThermalNuclearReactorPerformanceModel(om.ExplicitComponent):
         self.add_output("high_pressure_heat_demanded", val=0, shape=self.n_timesteps, units="kW")
         self.add_output("high_pressure_heat", val=0, shape=self.n_timesteps, units="kW")
         self.add_output("low_pressure_heat", val=0, shape=self.n_timesteps, units="kW")
-        self.add_output("heat_dispatched", val=0, shape=self.n_timesteps, units="kW")
+        self.add_output("heat_out", val=0, shape=self.n_timesteps, units="kW")
         self.add_output("electricity_out", val=0, shape=self.n_timesteps, units="kW")
 
         
@@ -61,29 +61,25 @@ class SimpleThermalNuclearReactorPerformanceModel(om.ExplicitComponent):
             (inputs["high_pressure_electrical_efficiency"] + (1-inputs["high_pressure_electrical_efficiency"]) 
             * inputs["low_pressure_electrical_efficiency"])))
      	#heat dispatch centric  
-        if operating_mode == "heat" 
-            outputs["heat_dispatched"] = np.minimum(inputs["external_heat_demand"][:], 
-                outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"])
+        if operating_mode == "heat":
+            outputs["heat_out"] = np.minimum(inputs["external_heat_demand"][:], outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"]))
 
-            outputs["low_pressure_heat"] = (1 - inputs"high_pressure_electrical_efficiency"]) * (outputs["high_pressure_heat"] -
-            outputs["heat_dispatched"])
+            outputs["low_pressure_heat"] = (1 - inputs["high_pressure_electrical_efficiency"]) * (outputs["high_pressure_heat"] -
+            outputs["heat_out"])
             outputs["electricity_out"] = (inputs["high_pressure_electrical_efficiency"]*outputs["high_pressure_heat"] +
                 inputs["low_pressure_electrical_efficiency"]*outputs["low_pressure_heat"])
         
         #electricity dispatch centric
-        elif operating_mode == "electricity"
+        elif operating_mode == "electricity":
             outputs["low_pressure_heat"] = np.minimum((inputs["hourly_power_production"][:] - 
                 outputs["high_pressure_heat"]*inputs["high_pressure_electrical_efficiency"]) / 
                 inputs["low_pressure_electrical_efficiency"] , 
-                outputs["high_pressure_heat"][:] * (1 - inputs["high_pressure_electrical_efficiency"])
-                )
-            outputs["heat_dispatched"] = (outputs["high_pressure_heat"] * (1 - #inputs["high_pressure_electrical_efficiency"]) 
-                - outputs["low_pressure_heat"])
-            outputs["electricity_out"] = (inputs["high_pressure_electrical_efficiency"] * 
-                outputs["high_pressure_heat"] + inputs["low_pressure_electrical_efficiency"] * outputs["low_pressure_heat"])
+                outputs["high_pressure_heat"][:] * (1 - inputs["high_pressure_electrical_efficiency"]))
+            outputs["heat_out"] = (outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"]) - outputs["low_pressure_heat"])
+            outputs["electricity_out"] = (inputs["high_pressure_electrical_efficiency"] * outputs["high_pressure_heat"] + inputs["low_pressure_electrical_efficiency"] * outputs["low_pressure_heat"])
         else:
             NotImplementedError((f"The nuclear model should be either heat or electricity, now values are simply passed through"))
-            outputs["heat_dispatched"] = inputs["external_heat_demand"]
+            outputs["heat_out"] = inputs["external_heat_demand"]
             outputs["electricity_out"] = inputs["hourly_power_production"]
             outputs["low_pressure_heat"] = outputs["high_pressure_heat"] - outputs["electricity_out"] - outputs["heat_dispatched"]
 
@@ -117,7 +113,6 @@ class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
         # Capital Expenditure of Nuclear Reactor
         outputs["CapEx"] = inputs["nuclear_reactor_rated_capacity"] * inputs["nuclear_reactor_upfront_cost"]
         # Operational Expenditure of Nuclear Reactor 
-        outputs["OpEx"] = (inputs["nuclear_reactor_fixed_om_cost"] * inputs["nuclear_reactor_rated_capacity"]) + 
-            (inputs["nuclear_reactor_variable_om_cost"] * sum(inputs["electricity_out"][:]))
+        outputs["OpEx"] = (inputs["nuclear_reactor_fixed_om_cost"] * inputs["nuclear_reactor_rated_capacity"]) + (inputs["nuclear_reactor_variable_om_cost"] * sum(inputs["electricity_out"][:]))
 
 

@@ -8,10 +8,11 @@ from h2integrate.core.validators import gt_zero, contains
 from h2integrate.core.model_baseclasses import ResizeablePerformanceModelBaseConfig
 from h2integrate.converters.hydrogen.utilities import size_electrolyzer_for_hydrogen_demand
 from h2integrate.converters.hydrogen.electrolyzer_baseclass import ElectrolyzerPerformanceBaseClass
+from h2integrate.converters.hydrogen.electrolyzer_baseclass import ElectrolyzerCostBaseClass
 
 
 @define(kw_only=True)
-class HTSElectrolyzerPerformanceModelConfig(ResizeablePerformanceModelBaseConfig):
+class HTSEElectrolyzerPerformanceModelConfig(ResizeablePerformanceModelBaseConfig):
     """
     Configuration class for the HTSElectrolyzerPerformanceModel.
     This class does not go into stack-specific operations, so this is more of a bulk model but could be extended later to account for stack physics.
@@ -31,9 +32,10 @@ class HTSElectrolyzerPerformanceModelConfig(ResizeablePerformanceModelBaseConfig
     turndown_ratio: float = field(validator=gt_zero)
     electrolyzer_capex: int = field()
     pressure_H2: float = field(validator=gt_zero)
+    demand_internal: float = field(validator=gt_zero)
 
 
-class HTSElectrolyzerPerformanceModel(ElectrolyzerPerformanceBaseClass):
+class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
     """
     An OpenMDAO component that wraps the HTS-electrolyzer model.
     Takes electricity and heat input and outputs hydrogen and oxygen generation rates.
@@ -74,6 +76,7 @@ class HTSElectrolyzerPerformanceModel(ElectrolyzerPerformanceBaseClass):
         )
         self.add_input("cluster_size", val=-1.0, units="MW")
         self.add_input("max_hydrogen_capacity", val=1000.0, units="kg/h")
+        self.add_input("turndown_ratio", val=1.0, units="unitless")
         
 
         self.add_output("water_demand", val = 0.0, shape = n_timesteps, units = "kg/hr", desc = "Water demand")
@@ -85,20 +88,22 @@ class HTSElectrolyzerPerformanceModel(ElectrolyzerPerformanceBaseClass):
         # TODO: add feedstock inputs and consumption outputs
 
     def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
-       """ 
-            Assume that there are separations between actual heat and electricity in and the hydrogen demand"
-       """
+       # 
+       #     Assume that there are separations between actual heat and electricity in and the hydrogen demand
+       #
         plant_life = self.options["plant_config"]["plant"]["plant_life"]
 
         electrolyzer_size_kw = inputs["n_clusters"][0] * self.config.cluster_rating_MW * 1000
+        demand_internal = np.max(np.min(electrolyzer_size_kw, inputs["hydrogen_demand"]),inputs["turndown_ratio"]*electrolyzer_size_kw)
+       
         #Calculates the amount of heat required
-        nominal_heat_dem = inputs["hydrogen_demand"][:] * inputs["nom_heat"]
+        nominal_heat_dem = demand_internal * inputs["nom_heat"]
         outputs["heat_demand"] = nominal_heat_dem
 
 
         #Reducing the amount of heat used by the capacity of the system
-        actual_heat_internal = min(nominal_heat_dem, inputs["heat_in"][:])        
-        outputs["water_demand"] = inputs["hydrogen_demand][:] * 18.015 / 2.016
+        actual_heat_internal = np.min(nominal_heat_dem, inputs["heat_in"][:])        
+        outputs["water_demand"] = demand_internal * 18.015 / 2.016
       
         #calculate maximum heat, assume that if heat is not there, it's replaced by electricity
   
@@ -110,18 +115,18 @@ class HTSElectrolyzerPerformanceModel(ElectrolyzerPerformanceBaseClass):
         outputs["hydrogen_out"] = (actual_elec + actual_heat) / total_energy_required
     
 
-class HTSECostModelConfig(CostModelBaseConfig):
-    """Configuration class for an HTSE cost model
+#class HTSECostModelConfig(CostModelBaseConfig):
+#    """Configuration class for an HTSE cost model
 
-    Attributes: 
+#    Attributes: 
         
-    """
+#    """
 
-    capex_USD_per_kW: float = field(validator=gte_zero)
-    fixed_USD_per_kW_per_year: float = field(validator= gte_zero)
+#    capex_USD_per_kW: float = field(validator=gte_zero)
+#    fixed_USD_per_kW_per_year: float = field(validator= gte_zero)
 
-class HTSECostModel(CostModelBaseClass):
-    def setup(self)
+class HTSECostModel(ElectrolyzerCostBaseClass):
+    def setup(self):
         self.config = HTSECostModelConfig.from_dict(
             merge_shared_inputs(self.options["tech_config"]["model_inputs"], "cost"),
             additional_cls_name=self._class_._name_,)
@@ -135,9 +140,9 @@ class HTSECostModel(CostModelBaseClass):
 
         self.add_input("fixed_opex", val=self.config.fixed_USD_per_kW_per_year, units="USD/kw/yr", desc="Fixed OpEx of electrolyzer in USD/(kW-year)",)
 
-    def compute(self, inputs, outputs, discrete_inputs, discrete_outputs)
+    def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
         outputs["CapEx"] = inputs["unit_capex"] * electrolyzer_size_kw
-        outputs["OpEx"] = inputs["fixed_capex"] * electrolyzer_size_kw
+        outputs["OpEx"] = inputs["fixed_opex"] * electrolyzer_size_kw
         
 
 
