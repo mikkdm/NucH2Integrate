@@ -14,11 +14,12 @@ plant:
 # this will naturally grow as we mature the interconnected tech
 technology_interconnections: [
   ["nuclear", "htse", "electricity", "cable"],
-  ["nuclear", "htse", "heat", "pipe"]]
+  ["nuclear", "htse", ["heat_out", "heat_in"]], 
+  ["htse", "h2_storage", "hydrogen", "pipe"]]
   # -["nuclear","network_heat","heat","pipe"]
 
-tech_to_dispatch_connections: [
-    ["htse", "h2_storage", "hydrogen", "pipe"]]
+tech_to_dispatch_connections: []#[
+ #   ["htse", "hydrogen"], ["nuclear", "electricity"]]
 
 resource_to_tech_connections: []
 
@@ -26,7 +27,7 @@ finance_parameters:
   finance_groups:
     profast_model:
       commodity: "electricity"
-      finance_model: "ProFastComp"
+      finance_model: "ProFastLCO"
       model_inputs:
         params:
           analysis_start_year: 2032
@@ -57,6 +58,8 @@ finance_parameters:
       technologies: ["nuclear"]
     hydrogen:
       commodity: hydrogen
+      commodity_stream: htse
+      finance_groups: ["profast_model"]
       technologies: ["htse"]
 
  

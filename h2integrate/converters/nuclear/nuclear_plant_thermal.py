@@ -1,118 +1,171 @@
-import openmdao.api as om
-from attrs import field, define
+import numpy as np
+from attrs import define, field
 
+from h2integrate.core.model_baseclasses import CostModelBaseClass, CostModelBaseConfig, PerformanceModelBaseClass
 from h2integrate.core.utilities import BaseConfig, merge_shared_inputs
-from h2integrate.core.model_baseclasses import CostModelBaseClass
+from h2integrate.core.validators import contains, gt_zero
 
-@define
+
+@define(kw_only=True)
 class SimpleThermalNuclearReactorConfig(BaseConfig):
-    hourly_power_production: float = field()
-    high_pressure_electrical_efficiency: float = field()
-    low_pressure_electrical_efficiency: float = field()
-    nuclear_reactor_capacity: float = field()
+    operating_mode: str = field(validator=contains(["heat", "electricity"]))
+    hourly_power_production: float = field(validator=gt_zero)
+    high_pressure_electrical_efficiency: float = field(validator=gt_zero)
+    low_pressure_electrical_efficiency: float = field(validator=gt_zero)
+    nuclear_reactor_capacity: float = field(validator=gt_zero)
 
-class SimpleThermalNuclearReactorPerformanceModel(om.ExplicitComponent):
-    """
-    Simple nuclear reactor performance model.
-    """
+
+class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
+    """Simple thermal nuclear reactor model with heat and electricity outputs."""
 
     def initialize(self):
-        self.options.declare("tech_config", types=dict)
-        self.options.declare("plant_config", types=dict)
-        self.options.declare("driver_config", types=dict)
+        super().initialize()
+        self.commodity = "electricity"
+        self.commodity_rate_units = "kW"
+        self.commodity_amount_units = "kW*h"
 
     def setup(self):
-        n_timesteps = self.options["plant_config"]["plant"]["simulation"]["n_timesteps"]
-        self.config = SimpleNuclearReactorConfig.from_dict(
-            self.options["tech_config"]["model_inputs"]["performance_parameters"],
+        self.config = SimpleThermalNuclearReactorConfig.from_dict(
+            merge_shared_inputs(self.options["tech_config"]["model_inputs"], "performance"),
             strict=False,
-        )
-        #external input
-        self.add_input("hourly_power_production", val=0.0, shape=self.n_timesteps, units="MW")
-        self.add_input("external_heat_demand", val=0.0, shape=self.n_timesteps, units="MW")
-        self.add_input("nuclear_reactor_capacity", val=self.config.nuclear_reactor_capacity, units="MW")
-
-       
-        # Efficiencies Inputs 
-        self.add_input("high_pressure_electrical_efficiency", val=self.config.high_pressure_electrical_efficiency, units=None) 
-        self.add_input("low_pressure_electrical_efficiency", val=self.config.low_pressure_electrical_efficiency, units=None) 
-
-        # Ratios Inputs - now unused
-
-        # Outputs
-        self.add_output("high_pressure_heat_demanded", val=0, shape=self.n_timesteps, units="kW")
-        self.add_output("high_pressure_heat", val=0, shape=self.n_timesteps, units="kW")
-        self.add_output("low_pressure_heat", val=0, shape=self.n_timesteps, units="kW")
-        self.add_output("heat_out", val=0, shape=self.n_timesteps, units="kW")
-        self.add_output("electricity_out", val=0, shape=self.n_timesteps, units="kW")
-
-        
-
-    def compute(self, inputs, outputs):
-        # Valid options for this are 'heat' and 'electricity'. 
-        operating_mode = discrete_inputs["operating_mode"]
-        
-        outputs["high_pressure_heat_demanded"] = (inputs["hourly_power_production"][:] + inputs["external_heat_demand"]
-            [:]*inputs["low_pressure_electrical_efficiency"]) / (inputs["high_pressure_electrical_efficiency"] +
-            (1-inputs["high_pressure_electrical_efficiency"]) * inputs["low_pressure_electrical_efficiency"])
-        #this equation calculates the necessary reactor heat generated to meet both the heat and electricity demands
-        
-        outputs["high_pressure_heat"] = np.minimum(outputs["high_pressure_heat_demanded"], (inputs["hourly_power_production"][:] / 
-            (inputs["high_pressure_electrical_efficiency"] + (1-inputs["high_pressure_electrical_efficiency"]) 
-            * inputs["low_pressure_electrical_efficiency"])))
-     	#heat dispatch centric  
-        if operating_mode == "heat":
-            outputs["heat_out"] = np.minimum(inputs["external_heat_demand"][:], outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"]))
-
-            outputs["low_pressure_heat"] = (1 - inputs["high_pressure_electrical_efficiency"]) * (outputs["high_pressure_heat"] -
-            outputs["heat_out"])
-            outputs["electricity_out"] = (inputs["high_pressure_electrical_efficiency"]*outputs["high_pressure_heat"] +
-                inputs["low_pressure_electrical_efficiency"]*outputs["low_pressure_heat"])
-        
-        #electricity dispatch centric
-        elif operating_mode == "electricity":
-            outputs["low_pressure_heat"] = np.minimum((inputs["hourly_power_production"][:] - 
-                outputs["high_pressure_heat"]*inputs["high_pressure_electrical_efficiency"]) / 
-                inputs["low_pressure_electrical_efficiency"] , 
-                outputs["high_pressure_heat"][:] * (1 - inputs["high_pressure_electrical_efficiency"]))
-            outputs["heat_out"] = (outputs["high_pressure_heat"] * (1 - inputs["high_pressure_electrical_efficiency"]) - outputs["low_pressure_heat"])
-            outputs["electricity_out"] = (inputs["high_pressure_electrical_efficiency"] * outputs["high_pressure_heat"] + inputs["low_pressure_electrical_efficiency"] * outputs["low_pressure_heat"])
-        else:
-            NotImplementedError((f"The nuclear model should be either heat or electricity, now values are simply passed through"))
-            outputs["heat_out"] = inputs["external_heat_demand"]
-            outputs["electricity_out"] = inputs["hourly_power_production"]
-            outputs["low_pressure_heat"] = outputs["high_pressure_heat"] - outputs["electricity_out"] - outputs["heat_dispatched"]
-
-
-
-@define
-class SimpleThermalNuclearReactorCostConfig(BaseConfig):
-    nuclear_reactor_rated_capacity: float = field()
-    nuclear_reactor_upfront_cost: float = field()    
-    nuclear_reactor_fixed_om_cost: float = field()
-    nuclear_reactor_variable_om_cost: float = field()
-    cost_year: float = field(default = 2025)
-class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
-    """
-    Simple nuclear reactor cost model.
-    """
-
-    def setup(self):
-        n_timesteps = self.options["plant_config"]["plant"]["simulation"]["n_timesteps"]
-        self.config = SimpleNuclearReactorCostConfig.from_dict(
-            merge_shared_inputs(self.options["tech_config"]["model_inputs"], "cost")
+            additional_cls_name=self.__class__.__name__,
         )
         super().setup()
-        self.add_input("nuclear_reactor_rated_capacity", val=self.config.nuclear_reactor_rated_capacity, units="kW")
-        self.add_input("nuclear_reactor_upfront_cost", val=self.config.nuclear_reactor_upfront_cost, units="kW")
-        self.add_input("nuclear_reactor_fixed_om_cost", val=self.config.nuclear_reactor_fixed_om_cost, units="kW")
-        self.add_input("nuclear_reactor_variable_om_cost", val=self.config.nuclear_reactor_variable_om_cost, units="kW*h")
-        self.add_input("electricity_out", val=1000, shape=n_timesteps, units="kW")
+
+        self.add_discrete_input("operating_mode", val=self.config.operating_mode)
+        self.add_input(
+            "hourly_power_production",
+            val=self.config.hourly_power_production,
+            units="MW",
+            desc="Requested electric power setpoint",
+        )
+        self.add_input(
+            "nuclear_reactor_capacity",
+            val=self.config.nuclear_reactor_capacity,
+            units="MW",
+            desc="Available reactor thermal capacity",
+        )
+        self.add_input(
+            "high_pressure_electrical_efficiency",
+            val=self.config.high_pressure_electrical_efficiency,
+            units="unitless",
+        )
+        self.add_input(
+            "low_pressure_electrical_efficiency",
+            val=self.config.low_pressure_electrical_efficiency,
+            units="unitless",
+        )
+
+        self.add_output("high_pressure_heat_demanded", val=0.0, shape=self.n_timesteps, units="kW")
+        self.add_output("high_pressure_heat", val=0.0, shape=self.n_timesteps, units="kW")
+        self.add_output("low_pressure_heat", val=0.0, shape=self.n_timesteps, units="kW")
+        self.add_output("heat_out", val=0.0, shape=self.n_timesteps, units="kW")
 
     def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
-        # Capital Expenditure of Nuclear Reactor
-        outputs["CapEx"] = inputs["nuclear_reactor_rated_capacity"] * inputs["nuclear_reactor_upfront_cost"]
-        # Operational Expenditure of Nuclear Reactor 
-        outputs["OpEx"] = (inputs["nuclear_reactor_fixed_om_cost"] * inputs["nuclear_reactor_rated_capacity"]) + (inputs["nuclear_reactor_variable_om_cost"] * sum(inputs["electricity_out"][:]))
+        operating_mode = discrete_inputs["operating_mode"]
+        hp_eff = float(inputs["high_pressure_electrical_efficiency"][0])
+        lp_eff = float(inputs["low_pressure_electrical_efficiency"][0])
+        thermal_capacity_mw = float(inputs["nuclear_reactor_capacity"][0])
+        requested_power_mw = max(float(inputs["hourly_power_production"][0]), 0.0)
+
+        combined_efficiency = hp_eff + (1.0 - hp_eff) * lp_eff
+        if combined_efficiency <= 0.0:
+            raise ValueError("Combined nuclear electric efficiency must be greater than zero")
+
+        max_electricity_mw = thermal_capacity_mw * combined_efficiency
+        electricity_out_mw = min(requested_power_mw, max_electricity_mw)
+        thermal_used_for_electricity_mw = electricity_out_mw / combined_efficiency
+        remaining_thermal_mw = max(thermal_capacity_mw - thermal_used_for_electricity_mw, 0.0)
+
+        if operating_mode == "heat":
+            heat_out_mw = remaining_thermal_mw
+        elif operating_mode == "electricity":
+            heat_out_mw = 0.0
+        else:
+            raise NotImplementedError(
+                "The nuclear operating_mode must be either 'heat' or 'electricity'"
+            )
+
+        high_pressure_heat_kw = np.full(self.n_timesteps, thermal_used_for_electricity_mw * 1000.0)
+        low_pressure_heat_kw = np.full(
+            self.n_timesteps, thermal_used_for_electricity_mw * (1.0 - hp_eff) * 1000.0
+        )
+        electricity_out_kw = np.full(self.n_timesteps, electricity_out_mw * 1000.0)
+        heat_out_kw = np.full(self.n_timesteps, heat_out_mw * 1000.0)
+
+        outputs["high_pressure_heat_demanded"] = high_pressure_heat_kw
+        outputs["high_pressure_heat"] = high_pressure_heat_kw
+        outputs["low_pressure_heat"] = low_pressure_heat_kw
+        outputs["heat_out"] = heat_out_kw
+        outputs["electricity_out"] = electricity_out_kw
+        outputs["rated_electricity_production"] = max_electricity_mw * 1000.0
+
+        total_electricity = np.sum(electricity_out_kw) * (self.dt / 3600.0)
+        outputs["total_electricity_produced"] = total_electricity
+        annual_electricity = total_electricity / self.fraction_of_year_simulated
+        outputs["annual_electricity_produced"] = np.full(self.plant_life, annual_electricity)
+
+        capacity_factor = (
+            electricity_out_mw / max_electricity_mw if max_electricity_mw > 0.0 else 0.0
+        )
+        outputs["capacity_factor"] = np.full(self.plant_life, capacity_factor)
+        outputs["replacement_schedule"] = np.zeros(self.plant_life)
 
 
+@define(kw_only=True)
+class SimpleThermalNuclearReactorCostConfig(CostModelBaseConfig):
+    nuclear_reactor_rated_capacity: float = field(validator=gt_zero)
+    nuclear_reactor_upfront_cost: float = field(validator=gt_zero)
+    nuclear_reactor_fixed_om_cost: float = field(validator=gt_zero)
+    nuclear_reactor_variable_om_cost: float = field(validator=gt_zero)
+    cost_year: int = field(default=2025, converter=int)
+
+
+class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
+    """Simple cost model for the thermal nuclear reactor."""
+
+    def setup(self):
+        self.dt = self.options["plant_config"]["plant"]["simulation"]["dt"]
+        self.plant_life = int(self.options["plant_config"]["plant"]["plant_life"])
+        n_timesteps = int(self.options["plant_config"]["plant"]["simulation"]["n_timesteps"])
+        self.config = SimpleThermalNuclearReactorCostConfig.from_dict(
+            merge_shared_inputs(self.options["tech_config"]["model_inputs"], "cost"),
+            strict=False,
+            additional_cls_name=self.__class__.__name__,
+        )
+        super().setup()
+
+        self.add_input(
+            "nuclear_reactor_rated_capacity",
+            val=self.config.nuclear_reactor_rated_capacity,
+            units="kW",
+        )
+        self.add_input(
+            "nuclear_reactor_upfront_cost",
+            val=self.config.nuclear_reactor_upfront_cost,
+            units="USD/kW",
+        )
+        self.add_input(
+            "nuclear_reactor_fixed_om_cost",
+            val=self.config.nuclear_reactor_fixed_om_cost,
+            units="USD/(kW*year)",
+        )
+        self.add_input(
+            "nuclear_reactor_variable_om_cost",
+            val=self.config.nuclear_reactor_variable_om_cost,
+            units="USD/(kW*h)",
+        )
+        self.add_input("electricity_out", val=0.0, shape=n_timesteps, units="kW")
+
+    def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
+        rated_capacity_kw = float(inputs["nuclear_reactor_rated_capacity"][0])
+        upfront_cost_per_kw = float(inputs["nuclear_reactor_upfront_cost"][0])
+        fixed_om_per_kw_year = float(inputs["nuclear_reactor_fixed_om_cost"][0])
+        variable_om_per_kwh = float(inputs["nuclear_reactor_variable_om_cost"][0])
+
+        outputs["CapEx"] = rated_capacity_kw * upfront_cost_per_kw
+        outputs["OpEx"] = fixed_om_per_kw_year * rated_capacity_kw
+
+        delivered_electricity_kwh = np.sum(inputs["electricity_out"]) * (self.dt / 3600.0)
+        annual_variable_om = variable_om_per_kwh * delivered_electricity_kwh
+        outputs["VarOpEx"] = np.full(self.plant_life, annual_variable_om)

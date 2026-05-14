@@ -22,14 +22,14 @@ driver:
     rhobeg: 0.1
     disp: 3
     debug_print: True
-design variables:
+design_variables:
   nuclear:
     hourly_power_production:
       flag: True
       lower: 1
       upper: 500
       units: MW
-  electrolyzer:
+  htse:
     n_clusters:
       flag: True
       lower: 2.0

@@ -5,9 +5,9 @@ general:
 technologies:
   nuclear:
     performance_model:
-      model: "NuclearwithThermal"
+      model: NuclearwithThermal
     cost_model:
-      model: "NuclearwithThermalCost"
+      model: NuclearwithThermalCost
     model_inputs:
       performance_parameters:
         operating_mode: heat
@@ -26,9 +26,9 @@ technologies:
         #slightly adjusted away from 93% capacity factor
   htse:
     performance_model:
-      model: "HTSEPerformanceModel"
+      model: HTSEPerformanceModel
     cost_model:
-      model: "HTSECostModel"
+      model: HTSECostModel
     model_inputs:
       performance_parameters:
         nominal_heat_required: 6.4 #kWh/kg
@@ -52,17 +52,13 @@ technologies:
       shared_parameters:
         commodity: hydrogen
         commodity_rate_units: kg/h 
+      cost_parameters:
+        sizing_mode: auto
  
   combiner: 
     performance_model:
-      model: "combiner_performance"
-    dispatch_rule_set:
-      model: "pyomo_dispatch_generic_converter"
+      model: GenericCombinerPerformanceModel
     model_inputs:
       performance_parameters:
-        commodity: "hydrogen"
-        commodity_units: "kg/h"
-      dispatch_rule_parameters:
-        commodity_name: "hydrogen"
-        commodity_storage_units: "kg/h"
-      
+        commodity: hydrogen
+        commodity_rate_units: kg/h
