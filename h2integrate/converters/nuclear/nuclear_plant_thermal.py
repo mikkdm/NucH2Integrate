@@ -13,6 +13,7 @@ class SimpleThermalNuclearReactorConfig(BaseConfig):
     high_pressure_electrical_efficiency: float = field(validator=gt_zero)
     low_pressure_electrical_efficiency: float = field(validator=gt_zero)
     nuclear_reactor_capacity: float = field(validator=gt_zero)
+    minimum_heat_extract: float = field(default=0.0)
 
 
 class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
@@ -55,6 +56,19 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
             val=self.config.low_pressure_electrical_efficiency,
             units="unitless",
         )
+        self.add_input(
+            "minimum_heat_extract",
+            val=self.config.minimum_heat_extract,
+            units="MW",
+            desc="Minimum thermal output reserved for process heat extraction",
+        )
+        self.add_input(
+            "external_heat_demand",
+            val=0.0,
+            shape=self.n_timesteps,
+            units="MW",
+            desc="Requested process heat demand from downstream technologies",
+        )
 
         self.add_output("high_pressure_heat_demanded", val=0.0, shape=self.n_timesteps, units="kW")
         self.add_output("high_pressure_heat", val=0.0, shape=self.n_timesteps, units="kW")
@@ -65,49 +79,60 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
         operating_mode = discrete_inputs["operating_mode"]
         hp_eff = float(inputs["high_pressure_electrical_efficiency"][0])
         lp_eff = float(inputs["low_pressure_electrical_efficiency"][0])
-        thermal_capacity_mw = float(inputs["nuclear_reactor_capacity"][0])
+        electric_capacity_mw = float(inputs["nuclear_reactor_capacity"][0])
+        minimum_heat_extract_mw = max(float(inputs["minimum_heat_extract"][0]), 0.0)
         requested_power_mw = max(float(inputs["hourly_power_production"][0]), 0.0)
+        external_heat_demand_mw = np.maximum(np.asarray(inputs["external_heat_demand"], dtype=float), 0.0)
 
         combined_efficiency = hp_eff + (1.0 - hp_eff) * lp_eff
         if combined_efficiency <= 0.0:
             raise ValueError("Combined nuclear electric efficiency must be greater than zero")
+        if lp_eff <= 0.0:
+            raise ValueError("Low-pressure electrical efficiency must be greater than zero")
 
-        max_electricity_mw = thermal_capacity_mw * combined_efficiency
-        electricity_out_mw = min(requested_power_mw, max_electricity_mw)
-        thermal_used_for_electricity_mw = electricity_out_mw / combined_efficiency
-        remaining_thermal_mw = max(thermal_capacity_mw - thermal_used_for_electricity_mw, 0.0)
+        thermal_capacity_mw = electric_capacity_mw / combined_efficiency
+        high_pressure_electricity_mw = thermal_capacity_mw * hp_eff
+        available_process_heat_mw = thermal_capacity_mw * (1.0 - hp_eff)
+        heat_demand_mw = np.maximum(external_heat_demand_mw, minimum_heat_extract_mw)
 
         if operating_mode == "heat":
-            heat_out_mw = remaining_thermal_mw
+            heat_out_mw = np.minimum(heat_demand_mw, available_process_heat_mw)
+            electricity_out_mw = high_pressure_electricity_mw + (
+                available_process_heat_mw - heat_out_mw
+            ) * lp_eff
         elif operating_mode == "electricity":
-            heat_out_mw = 0.0
+            electricity_out_mw = min(requested_power_mw, electric_capacity_mw)
+            heat_out_mw = available_process_heat_mw - (
+                electricity_out_mw - high_pressure_electricity_mw
+            ) / lp_eff
+            heat_out_mw = np.clip(heat_out_mw, 0.0, available_process_heat_mw)
         else:
             raise NotImplementedError(
                 "The nuclear operating_mode must be either 'heat' or 'electricity'"
             )
 
-        high_pressure_heat_kw = np.full(self.n_timesteps, thermal_used_for_electricity_mw * 1000.0)
-        low_pressure_heat_kw = np.full(
-            self.n_timesteps, thermal_used_for_electricity_mw * (1.0 - hp_eff) * 1000.0
-        )
-        electricity_out_kw = np.full(self.n_timesteps, electricity_out_mw * 1000.0)
-        heat_out_kw = np.full(self.n_timesteps, heat_out_mw * 1000.0)
+        electricity_out_mw = np.clip(np.asarray(electricity_out_mw, dtype=float), 0.0, electric_capacity_mw)
+        low_pressure_heat_remaining_mw = available_process_heat_mw - heat_out_mw
 
-        outputs["high_pressure_heat_demanded"] = high_pressure_heat_kw
+        high_pressure_heat_kw = np.full(self.n_timesteps, available_process_heat_mw * 1000.0)
+        low_pressure_heat_kw = np.asarray(low_pressure_heat_remaining_mw, dtype=float) * 1000.0
+        electricity_out_kw = electricity_out_mw * 1000.0
+        heat_out_kw = np.asarray(heat_out_mw, dtype=float) * 1000.0
+
+        outputs["high_pressure_heat_demanded"] = heat_demand_mw * 1000.0
         outputs["high_pressure_heat"] = high_pressure_heat_kw
         outputs["low_pressure_heat"] = low_pressure_heat_kw
         outputs["heat_out"] = heat_out_kw
         outputs["electricity_out"] = electricity_out_kw
-        outputs["rated_electricity_production"] = max_electricity_mw * 1000.0
+        outputs["rated_electricity_production"] = electric_capacity_mw * 1000.0
 
         total_electricity = np.sum(electricity_out_kw) * (self.dt / 3600.0)
         outputs["total_electricity_produced"] = total_electricity
         annual_electricity = total_electricity / self.fraction_of_year_simulated
         outputs["annual_electricity_produced"] = np.full(self.plant_life, annual_electricity)
 
-        capacity_factor = (
-            electricity_out_mw / max_electricity_mw if max_electricity_mw > 0.0 else 0.0
-        )
+        avg_electricity_out_mw = float(np.mean(electricity_out_mw))
+        capacity_factor = avg_electricity_out_mw / electric_capacity_mw if electric_capacity_mw > 0.0 else 0.0
         outputs["capacity_factor"] = np.full(self.plant_life, capacity_factor)
         outputs["replacement_schedule"] = np.zeros(self.plant_life)
 

@@ -15,6 +15,7 @@ technologies:
         high_pressure_electrical_efficiency: 0.12
         low_pressure_electrical_efficiency: 0.22
         nuclear_reactor_capacity: 1000.0 # MWe
+        minimum_heat_extract: 1 # MW
 
         
       cost_parameters:

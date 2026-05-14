@@ -15,7 +15,8 @@ plant:
 technology_interconnections: [
   ["nuclear", "htse", "electricity", "cable"],
   ["nuclear", "htse", ["heat_out", "heat_in"]], 
-  ["htse", "h2_storage", "hydrogen", "pipe"]]
+  ["htse", "h2_storage", "hydrogen", "pipe"], 
+  ["htse", "nuclear", ["heat_demand", "external_heat_demand"]]]
   # -["nuclear","network_heat","heat","pipe"]
 
 tech_to_dispatch_connections: []#[
