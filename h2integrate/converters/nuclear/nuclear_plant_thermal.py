@@ -1,9 +1,13 @@
 import numpy as np
-from attrs import define, field
+from attrs import field, define
 
-from h2integrate.core.model_baseclasses import CostModelBaseClass, CostModelBaseConfig, PerformanceModelBaseClass
 from h2integrate.core.utilities import BaseConfig, merge_shared_inputs
-from h2integrate.core.validators import contains, gt_zero
+from h2integrate.core.validators import gt_zero, contains
+from h2integrate.core.model_baseclasses import (
+    CostModelBaseClass,
+    CostModelBaseConfig,
+    PerformanceModelBaseClass,
+)
 
 
 @define(kw_only=True)
@@ -12,12 +16,14 @@ class SimpleThermalNuclearReactorConfig(BaseConfig):
     hourly_power_production: float = field(validator=gt_zero)
     high_pressure_electrical_efficiency: float = field(validator=gt_zero)
     low_pressure_electrical_efficiency: float = field(validator=gt_zero)
-    nuclear_reactor_capacity: float = field(validator=gt_zero)
+    rated_capacity: float = field(validator=gt_zero)
     minimum_heat_extract: float = field(default=0.0)
 
 
 class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
     """Simple thermal nuclear reactor model with heat and electricity outputs."""
+
+    _time_step_bounds = (3600, 3600)
 
     def initialize(self):
         super().initialize()
@@ -41,9 +47,9 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
             desc="Requested electric power setpoint",
         )
         self.add_input(
-            "nuclear_reactor_capacity",
-            val=self.config.nuclear_reactor_capacity,
-            units="MW",
+            "rated_capacity",
+            val=self.config.rated_capacity,
+            units="kW",
             desc="Available reactor thermal capacity",
         )
         self.add_input(
@@ -79,10 +85,12 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
         operating_mode = discrete_inputs["operating_mode"]
         hp_eff = float(inputs["high_pressure_electrical_efficiency"][0])
         lp_eff = float(inputs["low_pressure_electrical_efficiency"][0])
-        electric_capacity_mw = float(inputs["nuclear_reactor_capacity"][0])
+        electric_capacity_mw = float(inputs["rated_capacity"][0]) * 1e-3  # convert kW to MW
         minimum_heat_extract_mw = max(float(inputs["minimum_heat_extract"][0]), 0.0)
         requested_power_mw = max(float(inputs["hourly_power_production"][0]), 0.0)
-        external_heat_demand_mw = np.maximum(np.asarray(inputs["external_heat_demand"], dtype=float), 0.0)
+        external_heat_demand_mw = np.maximum(
+            np.asarray(inputs["external_heat_demand"], dtype=float), 0.0
+        )
 
         combined_efficiency = hp_eff + (1.0 - hp_eff) * lp_eff
         if combined_efficiency <= 0.0:
@@ -97,21 +105,24 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
 
         if operating_mode == "heat":
             heat_out_mw = np.minimum(heat_demand_mw, available_process_heat_mw)
-            electricity_out_mw = high_pressure_electricity_mw + (
-                available_process_heat_mw - heat_out_mw
-            ) * lp_eff
+            electricity_out_mw = (
+                high_pressure_electricity_mw + (available_process_heat_mw - heat_out_mw) * lp_eff
+            )
         elif operating_mode == "electricity":
             electricity_out_mw = min(requested_power_mw, electric_capacity_mw)
-            heat_out_mw = available_process_heat_mw - (
-                electricity_out_mw - high_pressure_electricity_mw
-            ) / lp_eff
+            heat_out_mw = (
+                available_process_heat_mw
+                - (electricity_out_mw - high_pressure_electricity_mw) / lp_eff
+            )
             heat_out_mw = np.clip(heat_out_mw, 0.0, available_process_heat_mw)
         else:
             raise NotImplementedError(
                 "The nuclear operating_mode must be either 'heat' or 'electricity'"
             )
 
-        electricity_out_mw = np.clip(np.asarray(electricity_out_mw, dtype=float), 0.0, electric_capacity_mw)
+        electricity_out_mw = np.clip(
+            np.asarray(electricity_out_mw, dtype=float), 0.0, electric_capacity_mw
+        )
         low_pressure_heat_remaining_mw = available_process_heat_mw - heat_out_mw
 
         high_pressure_heat_kw = np.full(self.n_timesteps, available_process_heat_mw * 1000.0)
@@ -132,14 +143,16 @@ class SimpleThermalNuclearReactorPerformanceModel(PerformanceModelBaseClass):
         outputs["annual_electricity_produced"] = np.full(self.plant_life, annual_electricity)
 
         avg_electricity_out_mw = float(np.mean(electricity_out_mw))
-        capacity_factor = avg_electricity_out_mw / electric_capacity_mw if electric_capacity_mw > 0.0 else 0.0
+        capacity_factor = (
+            avg_electricity_out_mw / electric_capacity_mw if electric_capacity_mw > 0.0 else 0.0
+        )
         outputs["capacity_factor"] = np.full(self.plant_life, capacity_factor)
         outputs["replacement_schedule"] = np.zeros(self.plant_life)
 
 
 @define(kw_only=True)
 class SimpleThermalNuclearReactorCostConfig(CostModelBaseConfig):
-    nuclear_reactor_rated_capacity: float = field(validator=gt_zero)
+    rated_capacity: float = field(validator=gt_zero)
     nuclear_reactor_upfront_cost: float = field(validator=gt_zero)
     nuclear_reactor_fixed_om_cost: float = field(validator=gt_zero)
     nuclear_reactor_variable_om_cost: float = field(validator=gt_zero)
@@ -148,6 +161,8 @@ class SimpleThermalNuclearReactorCostConfig(CostModelBaseConfig):
 
 class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
     """Simple cost model for the thermal nuclear reactor."""
+
+    _time_step_bounds = (3600, 3600)
 
     def setup(self):
         self.dt = self.options["plant_config"]["plant"]["simulation"]["dt"]
@@ -161,8 +176,8 @@ class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
         super().setup()
 
         self.add_input(
-            "nuclear_reactor_rated_capacity",
-            val=self.config.nuclear_reactor_rated_capacity,
+            "rated_capacity",
+            val=self.config.rated_capacity,
             units="kW",
         )
         self.add_input(
@@ -183,7 +198,7 @@ class SimpleThermalNuclearReactorCostModel(CostModelBaseClass):
         self.add_input("electricity_out", val=0.0, shape=n_timesteps, units="kW")
 
     def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
-        rated_capacity_kw = float(inputs["nuclear_reactor_rated_capacity"][0])
+        rated_capacity_kw = float(inputs["rated_capacity"][0])
         upfront_cost_per_kw = float(inputs["nuclear_reactor_upfront_cost"][0])
         fixed_om_per_kw_year = float(inputs["nuclear_reactor_fixed_om_cost"][0])
         variable_om_per_kwh = float(inputs["nuclear_reactor_variable_om_cost"][0])
