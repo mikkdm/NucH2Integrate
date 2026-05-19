@@ -13,9 +13,7 @@ import pytest
 import openmdao.api as om
 from pytest import fixture
 
-from h2integrate import EXAMPLE_DIR
-from h2integrate.core.h2integrate_model import H2IntegrateModel
-from h2integrate.core.inputs.validation import load_yaml, load_tech_yaml, load_driver_yaml
+from h2integrate import EXAMPLE_DIR, H2IntegrateModel, load_yaml, load_tech_yaml, load_driver_yaml
 from h2integrate.postprocess.sql_to_csv import summarize_case, convert_sql_to_csv_summary
 
 
@@ -27,7 +25,7 @@ from h2integrate.postprocess.sql_to_csv import summarize_case, convert_sql_to_cs
 EXAMPLE_19_DIR = EXAMPLE_DIR / "19_simple_dispatch"
 
 
-@fixture
+@fixture(scope="function")
 def configuration(temp_dir):
     """Load and patch the example-19 configuration so outputs go to a temp dir."""
     config = load_yaml(EXAMPLE_19_DIR / "wind_battery_dispatch.yaml")

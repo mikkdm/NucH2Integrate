@@ -28,15 +28,18 @@ def test_pysam_battery_performance_model_without_controller(plant_config, subtes
     # Set up the OpenMDAO problem
     prob = om.Problem()
 
-    n_control_window = tech_config["technologies"]["battery"]["model_inputs"]["shared_parameters"][
-        "n_control_window"
-    ]
+    n_control_window_hours = tech_config["technologies"]["battery"]["model_inputs"][
+        "control_parameters"
+    ]["n_control_window_hours"]
 
     electricity_in = np.concatenate(
-        (np.ones(int(n_control_window / 2)) * 1000.0, np.zeros(int(n_control_window / 2)))
+        (
+            np.ones(int(n_control_window_hours / 2)) * 1000.0,
+            np.zeros(int(n_control_window_hours / 2)),
+        )
     )
 
-    electricity_demand = np.ones(int(n_control_window)) * 1000.0
+    electricity_demand = np.ones(int(n_control_window_hours)) * 1000.0
 
     prob.model.add_subsystem(
         name="IVC1",
@@ -46,13 +49,23 @@ def test_pysam_battery_performance_model_without_controller(plant_config, subtes
 
     prob.model.add_subsystem(
         name="IVC2",
-        subsys=om.IndepVarComp(name="time_step_duration", val=np.ones(n_control_window), units="h"),
+        subsys=om.IndepVarComp(
+            name="time_step_duration", val=np.ones(n_control_window_hours), units="h"
+        ),
         promotes=["*"],
     )
 
     prob.model.add_subsystem(
         name="IVC3",
         subsys=om.IndepVarComp(name="electricity_demand", val=electricity_demand, units="kW"),
+        promotes=["*"],
+    )
+
+    prob.model.add_subsystem(
+        name="IVC4",
+        subsys=om.IndepVarComp(
+            name="electricity_set_point", val=electricity_demand - electricity_in, units="kW"
+        ),
         promotes=["*"],
     )
 
@@ -155,11 +168,11 @@ def test_pysam_battery_performance_model_without_controller(plant_config, subtes
             1.5813561713279114,
         ]
     )
-    expected_unused_electricity = np.zeros(n_control_window)
+    expected_unused_electricity = np.zeros(n_control_window_hours)
 
     with subtests.test("expected_battery_power"):
         np.testing.assert_allclose(
-            prob.get_val("battery_electricity", units="kW"),
+            prob.get_val("electricity_out", units="kW"),
             expected_battery_power,
             rtol=1e-2,
         )
@@ -170,18 +183,28 @@ def test_pysam_battery_performance_model_without_controller(plant_config, subtes
         )
 
     with subtests.test("expected_battery_unmet_demand"):
+        combined_out = electricity_in + prob.get_val("electricity_out", units="kW")
+        combined_commodity_to_demand = np.clip(combined_out, a_min=0, a_max=electricity_demand)
+        unmet_demand = electricity_demand - combined_commodity_to_demand
         np.testing.assert_allclose(
-            prob.get_val("unmet_electricity_demand_out", units="kW"),
+            unmet_demand,
             expected_unment_demand,
             rtol=1e-2,
         )
 
     with subtests.test("expected_battery_unused_commodity"):
+        unused_electricity = np.clip(
+            electricity_in - combined_commodity_to_demand, a_min=0, a_max=None
+        )
         np.testing.assert_allclose(
-            prob.get_val("unused_electricity_out", units="kW"),
+            unused_electricity,
             expected_unused_electricity,
             rtol=1e-2,
         )
+    with subtests.test("Charge never exceeds available commodity"):
+        charge_profile = prob.get_val("storage_electricity_charge", units="kW")
+        indx_charging = np.argwhere(charge_profile).flatten()
+        assert np.all(np.abs(charge_profile)[indx_charging] <= electricity_in[indx_charging])
 
 
 @pytest.mark.regression
@@ -191,9 +214,10 @@ def test_battery_config(subtests):
         "max_capacity": batt_kw * 4,
         "max_charge_rate": batt_kw,
         "chemistry": "LFPGraphite",
-        "init_charge_fraction": 0.1,
-        "max_charge_fraction": 0.9,
-        "min_charge_fraction": 0.1,
+        "init_soc_fraction": 0.1,
+        "max_soc_fraction": 0.9,
+        "min_soc_fraction": 0.1,
+        "demand_profile": 0.0,
     }
 
     config = PySAMBatteryPerformanceModelConfig.from_dict(config_data)
@@ -204,19 +228,16 @@ def test_battery_config(subtests):
         assert config.max_capacity == batt_kw * 4
     with subtests.test("with minimal params minimum_SOC"):
         assert (
-            config.min_charge_fraction == 0.1
+            config.min_soc_fraction == 0.1
         )  # Decimal percent as compared to test_battery.py in HOPP 10%
     with subtests.test("with minimal params maximum_SOC"):
         assert (
-            config.max_charge_fraction == 0.9
+            config.max_soc_fraction == 0.9
         )  # Decimal percent as compared to test_battery.py in HOPP 90%
     with subtests.test("with minimal params initial_SOC"):
         assert (
-            config.init_charge_fraction == 0.1
+            config.init_soc_fraction == 0.1
         )  # Decimal percent as compared to test_battery.py in HOPP 10%
-
-    with subtests.test("with minimal params n_control_window"):
-        assert config.n_control_window == 24
 
     with subtests.test("with invalid capacity"):
         with pytest.raises(ValueError):
@@ -233,17 +254,17 @@ def test_battery_config(subtests):
         # SOC values must be between 0-100
         with pytest.raises(ValueError):
             data = deepcopy(config_data)
-            data["min_charge_fraction"] = -1.0
+            data["min_soc_fraction"] = -1.0
             PySAMBatteryPerformanceModelConfig.from_dict(data)
 
         with pytest.raises(ValueError):
             data = deepcopy(config_data)
-            data["max_charge_fraction"] = 120.0
+            data["max_soc_fraction"] = 120.0
             PySAMBatteryPerformanceModelConfig.from_dict(data)
 
         with pytest.raises(ValueError):
             data = deepcopy(config_data)
-            data["init_charge_fraction"] = 120.0
+            data["init_soc_fraction"] = 120.0
             PySAMBatteryPerformanceModelConfig.from_dict(data)
 
 
@@ -305,12 +326,12 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
             "shared_parameters": {
                 "max_charge_rate": init_charge_rate,
                 "max_capacity": init_capacity,
-                "n_control_window": 48,
-                "init_charge_fraction": 0.1,
-                "max_charge_fraction": 1.0,
-                "min_charge_fraction": 0.1,
+                "n_control_window_hours": 48,
+                "init_soc_fraction": 0.1,
+                "max_soc_fraction": 1.0,
+                "min_soc_fraction": 0.1,
             },
-            "performance_parameters": {"chemistry": "LFPGraphite"},
+            "performance_parameters": {"chemistry": "LFPGraphite", "demand_profile": 0.0},
         }
     }
     # Set up the OpenMDAO problem
@@ -324,6 +345,14 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
     prob_init.model.add_subsystem(
         name="IVC2",
         subsys=om.IndepVarComp(name="electricity_in", val=electricity_in, units="MW"),
+        promotes=["*"],
+    )
+
+    prob_init.model.add_subsystem(
+        name="IVC3",
+        subsys=om.IndepVarComp(
+            name="electricity_set_point", val=electricity_demand - electricity_in, units="kW"
+        ),
         promotes=["*"],
     )
 
@@ -342,21 +371,21 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
 
     with subtests.test("5 MW battery discharge profile within charge rate bounds"):
         assert (
-            prob_init.get_val("pysam_battery.battery_electricity_discharge", units="kW").max()
+            prob_init.get_val("pysam_battery.storage_electricity_discharge", units="kW").max()
             < init_charge_rate
         )
         assert (
-            prob_init.get_val("pysam_battery.battery_electricity_discharge", units="kW").min()
+            prob_init.get_val("pysam_battery.storage_electricity_discharge", units="kW").min()
             >= 0.0
         )
 
     with subtests.test("5 MW battery charge profile within charge rate bounds"):
         assert (
-            prob_init.get_val("pysam_battery.battery_electricity_charge", units="kW").min()
+            prob_init.get_val("pysam_battery.storage_electricity_charge", units="kW").min()
             > -1 * init_charge_rate
         )
         assert (
-            prob_init.get_val("pysam_battery.battery_electricity_charge", units="kW").max() <= 0.0
+            prob_init.get_val("pysam_battery.storage_electricity_charge", units="kW").max() <= 0.0
         )
 
     with subtests.test("5 MW battery rated production == charge rate"):
@@ -367,6 +396,11 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
             )
             == init_charge_rate
         )
+
+    with subtests.test("Charge never exceeds available commodity"):
+        charge_profile = prob_init.get_val("pysam_battery.storage_electricity_charge", units="kW")
+        indx_charging = np.argwhere(charge_profile).flatten()
+        assert np.all(np.abs(charge_profile)[indx_charging] <= electricity_in[indx_charging])
 
     # Re-run and set the charge rate as half of what it was before
     prob = om.Problem()
@@ -379,6 +413,14 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
     prob.model.add_subsystem(
         name="IVC2",
         subsys=om.IndepVarComp(name="electricity_in", val=electricity_in, units="MW"),
+        promotes=["*"],
+    )
+
+    prob.model.add_subsystem(
+        name="IVC3",
+        subsys=om.IndepVarComp(
+            name="electricity_set_point", val=electricity_demand - electricity_in, units="kW"
+        ),
         promotes=["*"],
     )
 
@@ -399,33 +441,33 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
 
     with subtests.test("2.5 MW battery discharge profile within charge rate bounds"):
         assert (
-            prob.get_val("pysam_battery.battery_electricity_discharge", units="kW").max()
+            prob.get_val("pysam_battery.storage_electricity_discharge", units="kW").max()
             < init_charge_rate / 2
         )
-        assert prob.get_val("pysam_battery.battery_electricity_discharge", units="kW").min() >= 0.0
+        assert prob.get_val("pysam_battery.storage_electricity_discharge", units="kW").min() >= 0.0
 
     with subtests.test("2.5 MW battery charge profile within charge rate bounds"):
         assert (
-            prob.get_val("pysam_battery.battery_electricity_charge", units="kW").min()
+            prob.get_val("pysam_battery.storage_electricity_charge", units="kW").min()
             > -1 * init_charge_rate / 2
         )
-        assert prob.get_val("pysam_battery.battery_electricity_charge", units="kW").max() <= 0.0
+        assert prob.get_val("pysam_battery.storage_electricity_charge", units="kW").max() <= 0.0
 
     with subtests.test("2.5 MW battery discharge < charge rate"):
         assert prob.get_val(
-            "pysam_battery.battery_electricity_discharge", units="MW"
+            "pysam_battery.storage_electricity_discharge", units="MW"
         ).max() < init_charge_rate / (2 * 1e3)
 
     with subtests.test("2.5 MW battery discharge <= 5 MW battery discharge"):
         assert (
-            prob.get_val("pysam_battery.battery_electricity_discharge", units="MW").max()
-            < prob_init.get_val("pysam_battery.battery_electricity_discharge", units="MW").max()
+            prob.get_val("pysam_battery.storage_electricity_discharge", units="MW").max()
+            < prob_init.get_val("pysam_battery.storage_electricity_discharge", units="MW").max()
         )
 
     with subtests.test("5 MW battery charge <= 2.5 MW battery charge"):
         assert (
-            prob.get_val("pysam_battery.battery_electricity_discharge", units="MW").min()
-            <= prob_init.get_val("pysam_battery.battery_electricity_discharge", units="MW").min()
+            prob.get_val("pysam_battery.storage_electricity_discharge", units="MW").min()
+            <= prob_init.get_val("pysam_battery.storage_electricity_discharge", units="MW").min()
         )
 
     with subtests.test("2.5 MW battery rated production == charge rate"):
@@ -436,3 +478,8 @@ def test_pysam_battery_no_controller_change_capacity(plant_config, subtests):
             )
             == 2.5
         )
+
+    with subtests.test("Charge never exceeds available commodity"):
+        charge_profile = prob.get_val("pysam_battery.storage_electricity_charge", units="kW")
+        indx_charging = np.argwhere(charge_profile).flatten()
+        assert np.all(np.abs(charge_profile)[indx_charging] <= electricity_in[indx_charging])

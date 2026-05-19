@@ -129,3 +129,117 @@ def test_electrolyzer_outputs(tech_config, plant_config, subtests):
         assert prob.get_val("comp.operational_life", units="yr") == plant_life
     with subtests.test("replacement_schedule value"):
         assert np.any(prob.get_val("comp.replacement_schedule", units="unitless") == 0)
+
+
+@pytest.mark.regression
+def test_electrolyzer_results(tech_config, plant_config, subtests):
+    prob = om.Problem()
+    comp = ECOElectrolyzerPerformanceModel(
+        plant_config=plant_config, tech_config=tech_config, driver_config={}
+    )
+    prob.model.add_subsystem("comp", comp, promotes=["*"])
+    prob.setup()
+    power_profile = np.full(8760, 32.0)
+    prob.set_val("comp.electricity_in", power_profile, units="MW")
+
+    prob.run_model()
+
+    with subtests.test("Total hydrogen produced"):
+        assert (
+            pytest.approx(5297814.89908964, rel=1e-6)
+            == prob.get_val("comp.hydrogen_out", units="kg/h").sum()
+        )
+
+    with subtests.test("Total oxygen produced"):
+        assert (
+            pytest.approx(42045916.90741967, rel=1e-6)
+            == prob.get_val("comp.oxygen_out", units="kg/h").sum()
+        )
+
+    with subtests.test("Year 0 capacity factor"):
+        assert (
+            pytest.approx(77.10460139, rel=1e-6)
+            == prob.get_val("comp.capacity_factor", units="percent")[0]
+        )
+
+    with subtests.test("Rated H2 production"):
+        assert pytest.approx(784.3544735823235, rel=1e-6) == prob.get_val(
+            "comp.rated_hydrogen_production", units="kg/h"
+        )
+
+    with subtests.test("Rated O2 production"):
+        assert pytest.approx(6225.00099576, rel=1e-6) == prob.get_val(
+            "comp.rated_oxygen_production", units="kg/h"
+        )
+
+    with subtests.test("H2: CF*Rated = Annual"):
+        np.testing.assert_allclose(
+            prob.get_val("comp.rated_hydrogen_production", units="kg/h")
+            * prob.get_val("comp.capacity_factor", units="unitless")
+            * 8760,
+            prob.get_val("comp.annual_hydrogen_produced", units="kg/yr"),
+            rtol=1e-6,
+        )
+    with subtests.test("O2: CF*Rated = Annual"):
+        np.testing.assert_allclose(
+            prob.get_val("comp.rated_oxygen_production", units="kg/h")
+            * prob.get_val("comp.capacity_factor", units="unitless")
+            * 8760,
+            prob.get_val("comp.annual_oxygen_produced", units="kg/yr"),
+            rtol=1e-6,
+        )
+
+    # 10 kg water consumed per kg of H2 produced
+    with subtests.test("Water consumption"):
+        total_water_consumed_kg = prob.get_val("comp.water_consumed", units="galUS/h").sum() / 3.79
+        total_h2_produced = prob.get_val("comp.hydrogen_out", units="kg/h").sum()
+        assert pytest.approx(10.0, rel=1e-6) == total_water_consumed_kg / total_h2_produced
+
+    with subtests.test("Electricity consumption"):
+        total_electricity_consumed = prob.get_val("comp.electricity_consumed", units="kW").sum()
+
+        assert (
+            pytest.approx(52.72613937672745, rel=1e-6)
+            == total_electricity_consumed / total_h2_produced
+        )
+
+
+@pytest.mark.unit
+def test_electrolyzer_outputs_never_operated(tech_config, plant_config, subtests):
+    int(plant_config["plant"]["plant_life"])
+    n_timesteps = int(plant_config["plant"]["simulation"]["n_timesteps"])
+
+    prob = om.Problem()
+    comp = ECOElectrolyzerPerformanceModel(
+        plant_config=plant_config, tech_config=tech_config, driver_config={}
+    )
+    prob.model.add_subsystem("comp", comp, promotes=["*"])
+    prob.setup()
+    power_profile = np.zeros(n_timesteps)
+    prob.set_val("comp.electricity_in", power_profile, units="MW")
+
+    prob.run_model()
+
+    with subtests.test("Time until replacement is same as config"):
+        assert (
+            prob.get_val("comp.time_until_replacement")[0]
+            == tech_config["model_inputs"]["performance_parameters"]["uptime_hours_until_eol"]
+        )
+
+    with subtests.test("Zero efficiency"):
+        assert prob.get_val("comp.efficiency") == 0.0
+
+    with subtests.test("Zero hydrogen production"):
+        assert prob.get_val("comp.hydrogen_out").sum() == 0.0
+
+    with subtests.test("Zero oxygen production"):
+        assert prob.get_val("comp.oxygen_out").sum() == 0.0
+
+    with subtests.test("Zero water consumption"):
+        assert prob.get_val("comp.water_consumed").sum() == 0.0
+
+    with subtests.test("Zero power consumption"):
+        assert prob.get_val("comp.electricity_consumed").sum() == 0.0
+
+    with subtests.test("Zero capacity factor"):
+        assert prob.get_val("comp.capacity_factor").sum() == 0.0
