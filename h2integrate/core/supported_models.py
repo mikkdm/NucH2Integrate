@@ -78,6 +78,7 @@ from h2integrate.converters.hydrogen.basic_cost_model import BasicElectrolyzerCo
 from h2integrate.converters.hydrogen.pem_electrolyzer import ECOElectrolyzerPerformanceModel
 from h2integrate.converters.solar.atb_res_com_pv_cost import ATBResComPVCostModel
 from h2integrate.converters.solar.atb_utility_pv_cost import ATBUtilityPVCostModel
+from h2integrate.converters.hydrogen.htse_electrolyzer import HTSECostModel, HTSEPerformanceModel
 from h2integrate.converters.iron.martin_mine_cost_model import MartinIronMineCostComponent
 from h2integrate.converters.iron.martin_mine_perf_model import MartinIronMinePerformanceComponent
 from h2integrate.converters.methanol.smr_methanol_plant import (
@@ -98,6 +99,10 @@ from h2integrate.converters.methanol.co2h_methanol_plant import (
 from h2integrate.converters.natural_gas.natural_gas_cc_ct import (
     NaturalGasCostModel,
     NaturalGasPerformanceModel,
+)
+from h2integrate.converters.nuclear.nuclear_plant_thermal import (
+    SimpleThermalNuclearReactorCostModel,
+    SimpleThermalNuclearReactorPerformanceModel,
 )
 from h2integrate.converters.water_power.pysam_marine_cost import PySAMMarineCostModel
 from h2integrate.converters.hydrogen.singlitico_cost_model import SingliticoCostModel
@@ -222,6 +227,8 @@ supported_models = {
     "BasicElectrolyzerCostModel": BasicElectrolyzerCostModel,
     "CustomElectrolyzerCostModel": CustomElectrolyzerCostModel,
     "WOMBATElectrolyzerModel": WOMBATElectrolyzerModel,
+    "HTSEPerformanceModel": HTSEPerformanceModel,
+    "HTSECostModel": HTSECostModel,
     "LinearH2FuelCellPerformanceModel": LinearH2FuelCellPerformanceModel,
     "H2FuelCellCostModel": H2FuelCellCostModel,
     "SteamMethaneReformerPerformanceModel": SteamMethaneReformerPerformanceModel,
@@ -273,6 +280,8 @@ supported_models = {
     "NaturalGasPerformanceModel": NaturalGasPerformanceModel,
     "QuinnNuclearPerformanceModel": QuinnNuclearPerformanceModel,
     "QuinnNuclearCostModel": QuinnNuclearCostModel,
+    "NuclearwithThermal": SimpleThermalNuclearReactorPerformanceModel,
+    "NuclearwithThermalCost": SimpleThermalNuclearReactorCostModel,
     "NaturalGasCostModel": NaturalGasCostModel,
     # Transport
     "cable": CablePerformanceModel,
@@ -333,7 +342,6 @@ supported_models = {
 # This next section is to demarcate specific models that belong to certain categories that are
 # relevant for processing in the model stackup. Right now, these designations are
 # used in `h2integrate_model.py`.
-
 
 # Model classes that do not contribute costs to the finance stackup because they are essentially
 # internal-only models that aren't categorized as a specific technology (e.g. a generic combiner
