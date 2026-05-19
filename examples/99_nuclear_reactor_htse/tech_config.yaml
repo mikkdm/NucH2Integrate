@@ -1,6 +1,6 @@
-name: "technology_config"
-description: "This is a nuclear plant generating electricity and can also provide heat"
-general: 
+name: technology_config
+description: This is a nuclear plant generating electricity and can also provide heat
+general:
   folder_output: nuclear_htse
 technologies:
   nuclear:
@@ -11,20 +11,19 @@ technologies:
     model_inputs:
       performance_parameters:
         operating_mode: heat
-        hourly_power_production: 500 # MW
+        hourly_power_production: 500  # MW
         high_pressure_electrical_efficiency: 0.12
         low_pressure_electrical_efficiency: 0.22
-        nuclear_reactor_capacity: 1000.0 # MWe
-        minimum_heat_extract: 1 # MW
-
-        
+        minimum_heat_extract: 1  # MW
       cost_parameters:
         nuclear_reactor_rated_capacity: 5000000.0
         nuclear_reactor_upfront_cost: 5750.0
         nuclear_reactor_fixed_om_cost: 2.64
         nuclear_reactor_variable_om_cost: 0.0145
-        #Values from Table 38, Meta-Analysis of Advanced Nuclear Reactor Cost Estimations, 
-        #slightly adjusted away from 93% capacity factor
+        # Values from Table 38, Meta-Analysis of Advanced Nuclear Reactor Cost Estimations,
+        # slightly adjusted away from 93% capacity factor
+      shared_parameters:
+        rated_capacity: 1000000.0
   htse:
     performance_model:
       model: HTSEPerformanceModel
@@ -32,31 +31,32 @@ technologies:
       model: HTSECostModel
     model_inputs:
       performance_parameters:
-        nominal_heat_required: 6.4 #kWh/kg
-        nominal_electricity_required: 36.8 #kWh/kg
-        cluster_rating_MW: 1 #Electric-only sizing component
+        nominal_heat_required: 6.4  # kWh/kg
+        nominal_electricity_required: 36.8  # kWh/kg
+        cluster_rating_MW: 1  # Electric-only sizing component
         n_clusters: 25
-        turndown_ratio: 0.1 #minimum operating power
-
+        turndown_ratio: 0.1  # minimum operating power
       cost_parameters:
-        unit_capex: 1295 # $/kW
-        fixed_capex: 
-  
+        unit_capex: 1295  # $/kW
+        fixed_capex: null
   h2_storage:
     performance_model:
       model: StorageAutoSizingModel
     control_strategy:
-      model: PassThroughOpenLoopController
+      model: SimpleStorageOpenLoopController
     cost_model:
       model: LinedRockCavernStorageCostModel
     model_inputs:
       shared_parameters:
         commodity: hydrogen
-        commodity_rate_units: kg/h 
+        commodity_rate_units: kg/h
+        max_soc_fraction: 0.9
+        min_soc_fraction: 0.1
+        set_demand_as_avg_commodity_in: true
+        round_trip_efficiency: 1.0
       cost_parameters:
         sizing_mode: auto
- 
-  combiner: 
+  combiner:
     performance_model:
       model: GenericCombinerPerformanceModel
     model_inputs:

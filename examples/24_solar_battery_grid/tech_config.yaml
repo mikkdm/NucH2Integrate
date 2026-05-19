@@ -35,7 +35,7 @@ technologies:
     cost_model:
       model: ATBBatteryCostModel
     control_strategy:
-      model: DemandOpenLoopStorageController
+      model: SimpleStorageOpenLoopController
     model_inputs:
       shared_parameters:
         commodity: electricity
