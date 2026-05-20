@@ -38,28 +38,26 @@ technologies:
         turndown_ratio: 0.1  # minimum operating power
       cost_parameters:
         unit_capex: 1295  # $/kW
-        fixed_capex: null
-  h2_storage:
+        fixed_capex: 0.0
+  electrical_load_demand:
     performance_model:
-      model: StorageAutoSizingModel
-    control_strategy:
-      model: SimpleStorageOpenLoopController
-    cost_model:
-      model: LinedRockCavernStorageCostModel
-    model_inputs:
-      shared_parameters:
-        commodity: hydrogen
-        commodity_rate_units: kg/h
-        max_soc_fraction: 0.9
-        min_soc_fraction: 0.1
-        set_demand_as_avg_commodity_in: true
-        round_trip_efficiency: 1.0
-      cost_parameters:
-        sizing_mode: auto
-  combiner:
-    performance_model:
-      model: GenericCombinerPerformanceModel
+      model: GenericDemandComponent
     model_inputs:
       performance_parameters:
-        commodity: hydrogen
-        commodity_rate_units: kg/h
+        commodity: electricity
+        commodity_rate_units: kW
+        demand_profile: 100000  # 100 MW
+  grid_sell:
+    performance_model:
+      model: GridPerformanceModel
+    cost_model:
+      model: GridCostModel
+    model_inputs:
+      shared_parameters:
+        interconnection_size: 5000000  # 5 GW
+      cost_parameters:
+        cost_year: 2022
+        electricity_sell_price: 0.0  # $/kWh - only selling, no buying
+        interconnection_capex_per_kw: 0.0  # $/kW capital cost
+        interconnection_opex_per_kw: 0.0  # $/kW/year O&M cost
+        fixed_interconnection_cost: 0.0  # $ one-time fixed cost

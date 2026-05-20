@@ -1114,7 +1114,7 @@ class H2IntegrateModel:
         # loop through each linkage and instantiate an OpenMDAO object (assume it exists) for
         # the connection type (e.g. cable, pipeline, etc)
         for connection in technology_interconnections:
-            if len(connection) == 4:
+            if len(connection) == 4 and isinstance(connection[-1], str):
                 source_tech, dest_tech, transport_item, transport_type = connection
 
                 # Check if this is a multivariable stream connection
@@ -1232,9 +1232,16 @@ class H2IntegrateModel:
                         f"{dest_tech}.{transport_item}_in",
                     )
 
-            elif len(connection) == 3:
+            elif len(connection) == 3 or (len(connection) == 4 and isinstance(connection[3], int)):
+                # initialize src_indices to allow connections between different shaped variables
+                if isinstance(connection[-1], list):
+                    src_indices = None
+                    source_tech, dest_tech, connected_parameter = connection
+                else:
+                    source_tech, dest_tech, connected_parameter, target_length = connection
+                    src_indices = np.zeros(target_length, dtype=int)
+
                 # connect directly from source to dest
-                source_tech, dest_tech, connected_parameter = connection
                 if isinstance(connected_parameter, tuple | list):
                     source_parameter, dest_parameter = connected_parameter
                     # Check if this is a multivariable stream connection
@@ -1248,7 +1255,9 @@ class H2IntegrateModel:
                         )
                     else:
                         self.plant.connect(
-                            f"{source_tech}.{source_parameter}", f"{dest_tech}.{dest_parameter}"
+                            f"{source_tech}.{source_parameter}",
+                            f"{dest_tech}.{dest_parameter}",
+                            src_indices=src_indices,
                         )
                 else:
                     # Check if the connected_parameter is a multivariable stream
@@ -1264,6 +1273,7 @@ class H2IntegrateModel:
                         self.plant.connect(
                             f"{source_tech}.{connected_parameter}",
                             f"{dest_tech}.{connected_parameter}",
+                            src_indices=src_indices,
                         )
 
             else:
