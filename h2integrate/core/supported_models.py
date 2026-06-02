@@ -130,6 +130,8 @@ supported_models = _ModelRegistry(
         "QuinnNuclearCostModel": "converters.nuclear:QuinnNuclearCostModel",
         "SimpleThermalNuclearReactorPerformanceModel": "converters.nuclear:SimpleThermalNuclearReactorPerformanceModel",
         "SimpleThermalNuclearReactorCostModel": "converters.nuclear:SimpleThermalNuclearReactorCostModel",
+        "HTSEPerformanceModel": "converters.hydrogen:HTSEPerformanceModel",
+        "HTSECostModel": "converters.hydrogen:HTSECostModel",
         "NaturalGasCostModel": "converters.natural_gas:NaturalGasCostModel",
         # Transport
         "cable": "transporters:CablePerformanceModel",

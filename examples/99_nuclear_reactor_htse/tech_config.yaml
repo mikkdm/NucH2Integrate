@@ -5,9 +5,9 @@ general:
 technologies:
   nuclear:
     performance_model:
-      model: NuclearwithThermal
+      model: SimpleThermalNuclearReactorPerformanceModel
     cost_model:
-      model: NuclearwithThermalCost
+      model: SimpleThermalNuclearReactorCostModel
     model_inputs:
       performance_parameters:
         operating_mode: heat
@@ -58,6 +58,7 @@ technologies:
       cost_parameters:
         cost_year: 2022
         electricity_sell_price: 0.0  # $/kWh - only selling, no buying
+        sell_price_mode: constant
         interconnection_capex_per_kw: 0.0  # $/kW capital cost
         interconnection_opex_per_kw: 0.0  # $/kW/year O&M cost
         fixed_interconnection_cost: 0.0  # $ one-time fixed cost

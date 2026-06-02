@@ -10,11 +10,15 @@ plant:
 # interconnections; can support bidirectional connections
 # with the reverse definition.
 # this will naturally grow as we mature the interconnected tech
-technology_interconnections: [[nuclear, htse, electricity, cable], [nuclear, htse, [heat_out, heat_in]], [htse, nuclear, [
-          heat_demand, external_heat_demand]], [finance_subgroup_electricity, grid_sell, ['LCOE[0]', 'electricity_sell_price[:8760]']],
-   [htse, electrical_load_demand, [electricity_demand, electricity_demand]], [nuclear, electrical_load_demand, [electricity_out,
-          electricity_in]], [electrical_load_demand, grid_sell, [unused_electricity_out, electricity_set_point]], [electrical_load_demand,
-      grid_sell, [unused_electricity_out, electricity_in]]]
+technology_interconnections:
+  - [nuclear, htse, electricity, cable]
+  - [nuclear, htse, [heat_out, heat_in]]
+  - [htse, nuclear, [heat_demand, external_heat_demand]]
+  - [finance_subgroup_electricity, grid_sell, [LCOE, electricity_sell_price]]
+  - [htse, electrical_load_demand, [electricity_demand, electricity_demand]]
+  - [nuclear, electrical_load_demand, [electricity_out, electricity_in]]
+  - [electrical_load_demand, grid_sell, [unused_electricity_out, electricity_set_point]]
+  - [electrical_load_demand, grid_sell, [unused_electricity_out, electricity_in]]
 tech_to_dispatch_connections: []
 resource_to_tech_connections: []
 finance_parameters:
