@@ -5,9 +5,9 @@ general:
 technologies:
   nuclear:
     performance_model:
-      model: NuclearwithThermal
+      model: SimpleThermalNuclearReactorPerformanceModel
     cost_model:
-      model: NuclearwithThermalCost
+      model: SimpleThermalNuclearReactorCostModel
     model_inputs:
       performance_parameters:
         operating_mode: heat
