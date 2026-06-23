@@ -10,8 +10,11 @@ plant:
 # interconnections; can support bidirectional connections
 # with the reverse definition.
 # this will naturally grow as we mature the interconnected tech
-technology_interconnections: [[nuclear, htse, electricity, cable], [nuclear, htse, [heat_out, heat_in]], [htse, h2_storage,
-      hydrogen, pipe], [htse, nuclear, [heat_demand, external_heat_demand]]]
+technology_interconnections:
+  - [nuclear, htse, electricity, cable]
+  - [nuclear, htse, [heat_out, heat_in]]
+  - [htse, h2_storage, hydrogen, pipe]
+  - [htse, nuclear, [heat_demand, external_heat_demand]]
   # -["nuclear","network_heat","heat","pipe"]
 tech_to_dispatch_connections: []  #[
  #   ["htse", "hydrogen"], ["nuclear", "electricity"]]
