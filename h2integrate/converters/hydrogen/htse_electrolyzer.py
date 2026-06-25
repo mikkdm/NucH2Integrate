@@ -83,7 +83,8 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
         )
         self.add_output(
             "heat_demand",
-            val=0.0,
+            val=self.config.n_clusters*self.config.cluster_rating_MW
+                *1000*self.config.nominal_heat_required/self.config.nominal_electricity_required,
             shape=self.n_timesteps,
             units="kW",
             desc="Thermal demanded by the HTSE system",
