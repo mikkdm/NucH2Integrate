@@ -169,7 +169,7 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
         #electricity_demand_kw = np.minimum(electricity_demand_kw, electricity_available_kw)
         outputs["electricity_consumed"] = electricity_demand_kw
         outputs["hydrogen_out"] = hydrogen_produced
-        #outputs["heat_demand"] = np.minimum(rated_hydrogen_production, inputs["hydrogen_command_value"]) / self.config.nominal_heat_required
+        #outputs["heat_demand"] = np.minimum(rated_hydrogen_production, inputs["hydrogen_command_value"]) * self.config.nominal_heat_required
         outputs["heat_demand"] = rated_hydrogen_production * self.config.nominal_heat_required
         outputs["electricity_demand"] = electrolyzer_size_kw
         outputs["water_demand"] = hydrogen_produced * 18.015 / 2.016
