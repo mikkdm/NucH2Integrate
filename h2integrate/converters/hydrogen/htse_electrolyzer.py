@@ -1,21 +1,47 @@
-import math
-
 import numpy as np
-from attrs import define, field
+from attrs import field, define
+from CoolProp.CoolProp import PropsSI
 
+from h2integrate.core.utilities import merge_shared_inputs
+from h2integrate.core.validators import gt_zero, contains
+from h2integrate.core.model_baseclasses import (
+    CostModelBaseConfig,
+    ResizeablePerformanceModelBaseConfig,
+)
+from h2integrate.converters.hydrogen.utilities import size_electrolyzer_for_hydrogen_demand
 from h2integrate.converters.hydrogen.electrolyzer_baseclass import (
     ElectrolyzerCostBaseClass,
     ElectrolyzerPerformanceBaseClass,
 )
-from h2integrate.converters.hydrogen.utilities import size_electrolyzer_for_hydrogen_demand
-from h2integrate.core.model_baseclasses import CostModelBaseConfig, ResizeablePerformanceModelBaseConfig
-from h2integrate.core.utilities import merge_shared_inputs
-from h2integrate.core.validators import contains, gt_zero
 
 
 @define(kw_only=True)
 class HTSEElectrolyzerPerformanceModelConfig(ResizeablePerformanceModelBaseConfig):
-    """Configuration for the HTSE performance model."""
+    """Configuration class for the HTSE performance model.
+
+    Args:
+        n_clusters (int): Number of HTSE clusters in the system.
+        nominal_heat_required (float): Nominal thermal energy required per kg of hydrogen
+            in kWh/kg.
+        nominal_electricity_required (float): Nominal electrical energy required per kg of
+            hydrogen in kWh/kg.
+        location (str): Deployment location, either ``"onshore"`` or ``"offshore"``.
+            Present in config but not used directly in the current performance calculation.
+            Defaults to ``"onshore"``.
+        cluster_rating_MW (float): Nameplate electrical rating per cluster in MW.
+        eol_eff_percent_loss (float): End-of-life efficiency loss in percent. Present in
+            config but not used directly in the current timestep energy balance. Defaults
+            to ``10.0``.
+        uptime_hours_until_eol (int): Hours of operation between replacement events.
+            Defaults to ``80000``.
+        include_degradation_penalty (bool): Whether to apply a degradation penalty. Present
+            in config but not used directly in the current timestep energy balance. Defaults
+            to ``False``.
+        turndown_ratio (float): Minimum fraction of rated hydrogen production required to
+            stay on (unitless). Defaults to ``0.1``.
+        pressure_H2 (float): Hydrogen pressure setting. Present in config but not used
+            directly in the current timestep energy balance. Defaults to ``1.0``.
+    """
 
     n_clusters: int = field(validator=gt_zero)
     nominal_heat_required: float = field(validator=gt_zero)
@@ -30,9 +56,32 @@ class HTSEElectrolyzerPerformanceModelConfig(ResizeablePerformanceModelBaseConfi
 
 
 class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
-    """A simplified HTSE model using electricity and heat inputs."""
+    """A simplified high-temperature steam electrolysis (HTSE) model.
 
-    def setup(self):
+    This model represents hydrogen production from high-temperature steam electrolysis
+    using constant nominal specific energy requirements for electricity and heat. It
+    inherits from the electrolyzer base classes, so it is treated as a hydrogen-producing,
+    dispatchable technology with an ``electricity_in`` input and a ``hydrogen_out`` output.
+
+    Installed size is inferred from ``n_clusters`` and ``cluster_rating_MW``, and the model
+    also supports the ``resize_by_max_feedstock`` (from electricity) and
+    ``resize_by_max_commodity`` (from hydrogen) sizing modes inherited from the resizeable
+    performance base class. At each timestep the model uses available heat first, supplies
+    the remaining required energy electrically when possible, and limits hydrogen
+    production by the combined available energy and the turndown threshold. It also exposes
+    operating signals useful for coupled systems, including ``heat_demand``,
+    ``electricity_demand``, ``electricity_consumed``, and ``water_consumed``.
+
+    In the current implementation, ``electricity_demand`` reports installed electrical
+    demand equal to nameplate size, while ``electricity_consumed`` reports timestep
+    electricity required by the energy balance.
+
+    The implementation is intentionally simple and should be interpreted as a reduced-order
+    plant representation, not a detailed SOEC stack model with thermal transients,
+    degradation coupling, startup dynamics, or detailed balance-of-plant behavior.
+    """
+
+    def setup(self) -> None:
         self.config = HTSEElectrolyzerPerformanceModelConfig.from_dict(
             merge_shared_inputs(self.options["tech_config"]["model_inputs"], "performance"),
             strict=False,
@@ -74,20 +123,31 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
         self.add_input("cluster_size", val=1.0, units="MW")
         self.add_input("max_hydrogen_capacity", val=1000.0, units="kg/h")
 
-        self.add_output(
-            "water_demand",
+        self.add_input(
+            "water_in",
             val=0.0,
             shape=self.n_timesteps,
-            units="kg/h",
+            units="galUS/h",
+            desc="Water supply",
+        )
+
+        self.add_output(
+            "water_consumed",
+            val=0.0,
+            shape=self.n_timesteps,
+            units="galUS/h",
             desc="Water consumption",
         )
         self.add_output(
             "heat_demand",
-            val=self.config.n_clusters*self.config.cluster_rating_MW
-                *1000*self.config.nominal_heat_required/self.config.nominal_electricity_required,
+            val=self.config.n_clusters
+            * self.config.cluster_rating_MW
+            * 1000
+            * self.config.nominal_heat_required
+            / self.config.nominal_electricity_required,
             shape=self.n_timesteps,
             units="kW",
-            desc="Thermal demanded by the HTSE system",
+            desc="Thermal demand by the HTSE system",
         )
         self.add_output(
             "electricity_demand",
@@ -101,12 +161,10 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
             val=0.0,
             shape=self.n_timesteps,
             units="kW",
-            desc="Electricity consumed by the HTSE"
+            desc="Electricity consumed by the HTSE",
         )
 
     def compute(self, inputs, outputs, discrete_inputs, discrete_outputs):
-
-
         electrolyzer_size_mw = float(inputs["n_clusters"][0]) * self.config.cluster_rating_MW
 
         size_mode = discrete_inputs["size_mode"]
@@ -134,45 +192,67 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
         electrolyzer_size_kw = electrolyzer_size_mw * 1000.0
 
         if "system_level_control" in self.options["plant_config"]:
-            hydrogen_demand = inputs["hydrogen_command_value"] #kg/hr?
+            hydrogen_demand = inputs["hydrogen_command_value"]  # kg/hr?
         else:
-            hydrogen_demand = electrolyzer_size_kw/ self.config.nominal_electricity_required #kW/(kWh/kg) = kg/hr
-        ratio_heat_elec_nom = self.config.nominal_heat_required/self.config.nominal_electricity_required
+            hydrogen_demand = (
+                electrolyzer_size_kw / self.config.nominal_electricity_required
+            )  # kW/(kWh/kg) = kg/hr
+        ratio_heat_elec_nom = (
+            self.config.nominal_heat_required / self.config.nominal_electricity_required
+        )
 
         heat_available_kw = inputs["heat_in"]
-        electricity_available_kw =inputs["electricity_in"]
-        #hydrogen_demand = inputs["hydrogen_command_value"]
+        electricity_available_kw = inputs["electricity_in"]
+        # hydrogen_demand = inputs["hydrogen_command_value"]
+
         total_specific_energy = (
             self.config.nominal_heat_required + self.config.nominal_electricity_required
         )
         rated_hydrogen_production = electrolyzer_size_kw / self.config.nominal_electricity_required
-        #note here that the RATED production is based purely on the electrical requirement. The heat input is a bonus amount. Units here are kg/hr
+
+        # note here that the RATED production is based purely on the electrical requirement.
+        # The heat input is a bonus amount. Units here are kg/hr
         heat_demand_kw = hydrogen_demand * self.config.nominal_heat_required
+
         actual_heat_kw = np.minimum(heat_demand_kw, heat_available_kw)
         electricity_demand_kw = total_specific_energy * hydrogen_demand - actual_heat_kw
         ratio_in = heat_available_kw / electricity_available_kw
-        hydrogen_produced = np.where(electricity_available_kw < electricity_demand_kw,
-            np.where( ratio_in > ratio_heat_elec_nom,
-                electricity_available_kw/self.config.nominal_electricity_required,
-                (heat_available_kw + electricity_available_kw)/total_specific_energy),
-            (actual_heat_kw + electricity_demand_kw)/total_specific_energy)
-        
-        actual_electricity_kw = actual_heat_kw/ratio_heat_elec_nom
+        hydrogen_produced = np.where(
+            electricity_available_kw < electricity_demand_kw,
+            np.where(
+                ratio_in > ratio_heat_elec_nom,
+                electricity_available_kw / self.config.nominal_electricity_required,
+                (heat_available_kw + electricity_available_kw) / total_specific_energy,
+            ),
+            (actual_heat_kw + electricity_demand_kw) / total_specific_energy,
+        )
 
-            #in this case, the electricity is insufficient compared to the heat, so we'll use
-        #actual_electricity_kw = np.minimum(electricity_demand_kw, electricity_available_kw)
+        actual_heat_kw / ratio_heat_elec_nom
+
+        # in this case, the electricity is insufficient compared to the heat, so we'll use
+        # actual_electricity_kw = np.minimum(electricity_demand_kw, electricity_available_kw)
         min_turn_down = self.config.turndown_ratio * rated_hydrogen_production
         hydrogen_produced = np.where(hydrogen_produced >= min_turn_down, hydrogen_produced, 0.0)
 
-        #heat_demand_kw = hydrogen_out * self.config.nominal_heat_required
-       # electricity_demand_kw = hydrogen_out * total_specific_energy - actual_heat_kw
-        #electricity_demand_kw = np.minimum(electricity_demand_kw, electricity_available_kw)
+        # Density of liquid water at 20°C (293.15 K) and 1 atm (101325 Pa)
+        PropsSI("D", "T", 293.15, "P", 101325, "Water")
+        kg_per_liter_water = 1.0
+        water_demand_kg_per_h = hydrogen_produced * 18.015 / 2.016
+        liters_per_galUS = 3.785411
+        water_demand_gal_per_h = (
+            water_demand_kg_per_h * (1.0 / kg_per_liter_water) * (1.0 / liters_per_galUS)
+        )
+
+        # heat_demand_kw = hydrogen_out * self.config.nominal_heat_required
+        # electricity_demand_kw = hydrogen_out * total_specific_energy - actual_heat_kw
+        # electricity_demand_kw = np.minimum(electricity_demand_kw, electricity_available_kw)
         outputs["electricity_consumed"] = electricity_demand_kw
         outputs["hydrogen_out"] = hydrogen_produced
-        #outputs["heat_demand"] = np.minimum(rated_hydrogen_production, inputs["hydrogen_command_value"]) * self.config.nominal_heat_required
+        # outputs["heat_demand"] = np.minimum(rated_hydrogen_production,
+        # inputs["hydrogen_command_value"]) * self.config.nominal_heat_required
         outputs["heat_demand"] = hydrogen_demand * self.config.nominal_heat_required
         outputs["electricity_demand"] = electrolyzer_size_kw
-        outputs["water_demand"] = hydrogen_produced * 18.015 / 2.016
+        outputs["water_consumed"] = water_demand_gal_per_h
         outputs["rated_hydrogen_production"] = rated_hydrogen_production
         outputs["electrolyzer_size_mw"] = electrolyzer_size_mw
 
@@ -183,7 +263,7 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
 
         max_production = rated_hydrogen_production * self.n_timesteps * (self.dt / 3600.0)
         capacity_factor = total_hydrogen_produced / max_production if max_production > 0 else 0.0
-        outputs["capacity_factor"] =np.full(self.plant_life, capacity_factor)
+        outputs["capacity_factor"] = np.full(self.plant_life, capacity_factor)
 
         utilized_input_kw = actual_heat_kw + electricity_demand_kw
         available_input_kw = heat_available_kw + electricity_available_kw
@@ -205,22 +285,41 @@ class HTSEPerformanceModel(ElectrolyzerPerformanceBaseClass):
 
 @define(kw_only=True)
 class HTSECostModelConfig(CostModelBaseConfig):
-    """Configuration for the HTSE cost model."""
+    """Configuration class for the HTSE cost model.
+
+    Args:
+        unit_capex (float): Installed capital cost per kW of HTSE electrical size in USD/kW.
+        fixed_opex (float, optional): Fixed annual operating cost per kW in USD/(kW*year).
+            If omitted, it is populated from ``fixed_capex`` (or ``0.0`` when that is also
+            omitted).
+        fixed_capex (float, optional): Fallback value used to populate ``fixed_opex`` when
+            ``fixed_opex`` is not provided.
+        cost_year (int): Dollar year corresponding to the input costs. Defaults to ``2025``.
+    """
 
     unit_capex: float = field(validator=gt_zero)
     fixed_opex: float | None = field(default=None)
     fixed_capex: float | None = field(default=None)
     cost_year: int = field(default=2025, converter=int)
 
-    def __attrs_post_init__(self):
+    def __attrs_post_init__(self) -> None:
         if self.fixed_opex is None:
             self.fixed_opex = 0.0 if self.fixed_capex is None else float(self.fixed_capex)
 
 
 class HTSECostModel(ElectrolyzerCostBaseClass):
-    """A simple size-based cost model for HTSE."""
+    """A simple size-based cost model for HTSE.
 
-    def setup(self):
+    The model computes installed capital cost and fixed operating cost from the installed
+    HTSE electrical size reported by the performance model:
+
+    - ``CapEx`` from ``unit_capex * electrolyzer_size_kw``
+    - ``OpEx`` from ``fixed_opex * electrolyzer_size_kw``
+
+    The current model does not set a nonzero variable operating cost.
+    """
+
+    def setup(self) -> None:
         self.config = HTSECostModelConfig.from_dict(
             merge_shared_inputs(self.options["tech_config"]["model_inputs"], "cost"),
             strict=False,

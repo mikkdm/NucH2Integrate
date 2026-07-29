@@ -3054,20 +3054,19 @@ def test_plm_optimized_dispatch_example(subtests, temp_copy_of_example):
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "example_folder,resource_example_folder", [("99_nuclear_reactor_htse", None)]
+    "example_folder,resource_example_folder", [("36_nuclear_reactor_htse", None)]
 )
 def test_nuclear_reactor_htse_example(subtests, temp_copy_of_example):
     example_folder = temp_copy_of_example
 
     model = H2IntegrateModel(example_folder / "nuclear_reactor_thermal_htse.yaml")
     model.run()
-
     annual_nuclear_electricity = model.prob.get_val(
         "nuclear.annual_electricity_produced", units="TW*h/year"
     )[0]
     model.prob.get_val("htse.electricity_demand", units="TW*h/year")[0]
-    # annual_grid_sell = model.prob.get_val("grid_sell.annual_electricity_sold",
-    # units="TW*h/year")[0]
+    annual_htse_electricity = model.prob.get_val("htse.electricity_demand", units="TW*h/year")[0]
+    annual_grid_sell = model.prob.get_val("grid_sell.annual_electricity_sold", units="TW*h/year")[0]
     annual_hydrogen = model.prob.get_val("htse.annual_hydrogen_produced", units="kt/year")[0]
 
     with subtests.test("Nuclear annual electricity is positive"):
@@ -3076,13 +3075,13 @@ def test_nuclear_reactor_htse_example(subtests, temp_copy_of_example):
     with subtests.test("HTSE annual hydrogen production is positive"):
         assert annual_hydrogen == pytest.approx(5.951086956521741)
 
-    # with subtests.test("Grid annual electricity sold is non-negative"):
-    #     assert annual_grid_sell >= 0.0
+    with subtests.test("Grid annual electricity sold is non-negative"):
+        assert annual_grid_sell == pytest.approx(8.53262086956522)
 
-    # with subtests.test("Electricity balance between HTSE demand and grid sales"):
-    #     assert pytest.approx(annual_nuclear_electricity, rel=1e-4) == (
-    #         annual_htse_electricity + annual_grid_sell
-    #     )
+    with subtests.test("Electricity balance between HTSE demand and grid sales"):
+        assert pytest.approx(annual_nuclear_electricity, rel=1e-4) == (
+            annual_htse_electricity + annual_grid_sell
+        )
 
     high_pressure_heat = model.prob.get_val("nuclear.high_pressure_heat", units="MW")
     low_pressure_heat = model.prob.get_val("nuclear.low_pressure_heat", units="MW")
@@ -3097,10 +3096,10 @@ def test_nuclear_reactor_htse_example(subtests, temp_copy_of_example):
     with subtests.test("Nuclear electricity output is within rated limit"):
         assert np.all(nuclear_electricity_out <= rated_nuclear_output + 1e-6)
 
-    # unused_electricity = model.prob.get_val(
-    #     "electrical_load_demand.unused_electricity_out", units="MW"
-    # )
-    # grid_electricity_in = model.prob.get_val("grid_sell.electricity_in", units="MW")
+    unused_electricity = model.prob.get_val(
+        "electrical_load_demand.unused_electricity_out", units="MW"
+    )
+    grid_electricity_in = model.prob.get_val("grid_sell.electricity_in", units="MW")
 
-    # with subtests.test("Unused electricity is routed to grid sell"):
-    #     assert pytest.approx(unused_electricity.sum(), rel=1e-6) == grid_electricity_in.sum()
+    with subtests.test("Unused electricity is routed to grid sell"):
+        assert pytest.approx(unused_electricity.sum(), rel=1e-6) == grid_electricity_in.sum()
